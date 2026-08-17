@@ -1,0 +1,31 @@
+# mcu_bridge 参数。
+#
+# 节点名默认为 mcu_bridge；若用 launch 改了名字，这里的键要一起改，否则参数
+# 不会被加载（ROS 2 按节点名匹配，键名不符时是静默忽略，不报错）。
+
+mcu_bridge:
+  ros__parameters:
+    # 串口设备。CH340 通常是 /dev/ttyUSB0，但插拔顺序会变号。稳定做法是用
+    # by-id 路径，例如：
+    #   /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+    # 查看方式：ls -l /dev/serial/by-id/
+    device: /dev/ttyUSB0
+
+    # 波特率。协议固定 921600（MCU 实际 923077，误差 +0.16%，在容限内）。
+    # 改这个值必须同时改固件，否则表现为全帧 CRC 失败。
+    baud: 921600
+
+    # 上游 ~/cmd 断流判定阈值。超过这个时长没有新命令，节点**停止发送命令帧**，
+    # 交给 MCU 看门狗（200 ms 置过期位 / 500 ms 输出归零 / 2 s 重整握手）。
+    #
+    # 不要为了「保持链路」把它设得很大 —— 那等于让节点替上游持续重发旧命令，
+    # 把「上游挂了」伪装成「一切正常」，这是最坏的失效模式。
+    # 下限约束：至少三个命令周期（150 ms），否则正常调度抖动会被误判为断流。
+    cmd_timeout_ms: 150
+
+    # 下行命令帧发送频率。MCU 在 HELLO 里声明期望 20 Hz，改动前先确认固件。
+    command_rate_hz: 20
+
+    # 是否发布 ~/diagnostics（MCU 1 Hz 诊断帧）。这是链路质量的唯一窗口，
+    # 调试期建议保持 true。
+    publish_diagnostics: true
