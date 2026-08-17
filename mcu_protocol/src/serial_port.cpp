@@ -52,11 +52,17 @@ bool SerialPort::open(const std::string & device, uint32_t baud, std::string & e
   }
 
   // 独占打开。两个节点同时开同一个口都在发命令帧，MCU 收到的是两路交错的序号，
-  // 表现为「命令时而生效时而不生效」—— 拿到这个错误比事后查要省很多时间。
+  // 表现为「命令时而生效时而不生效」—— 这个错误极难事后定位，值得主动挡掉。
+  //
+  // 但**失败不是致命的**：设不上独占只意味着没拿到排他保证，不意味着这个口不能
+  // 用。某些 tty 驱动（含部分 pty 实现）不支持这个 ioctl。之前这里失败就 close()
+  // 并返回 false，等于让一个「加固措施」把整个节点挡在门外。
   if (::ioctl(fd_, TIOCEXCL) < 0) {
-    error = "设置独占访问失败: " + std::string(std::strerror(errno));
-    close();
-    return false;
+    exclusive_ = false;
+    excl_error_ = std::strerror(errno);
+  } else {
+    exclusive_ = true;
+    excl_error_.clear();
   }
 
   struct termios tio;
@@ -100,6 +106,14 @@ bool SerialPort::open(const std::string & device, uint32_t baud, std::string & e
 void SerialPort::close() noexcept
 {
   if (fd_ >= 0) {
+    // 清掉 TIOCEXCL 再关。**设了不清是个真实的泄漏**：独占标志挂在 tty 结构上，
+    // 只要还有别人持有这个 tty（pty 的另一端、或同一设备的另一个 fd），它就不会
+    // 随本进程退出而消失，下一次 open() 直接 EBUSY。
+    //
+    // 真实 USB 串口上这个泄漏不太显眼 —— 进程正常退出后设备往往重新枚举，标志
+    // 跟着消失。但进程崩溃或被 kill -9 时就会卡住，得等设备重插才能再打开，
+    // 调试期很浪费时间。接 pty 模拟器时百分之百复现（另一端一直持有 master fd）。
+    ::ioctl(fd_, TIOCNXCL);
     ::close(fd_);
     fd_ = -1;
   }

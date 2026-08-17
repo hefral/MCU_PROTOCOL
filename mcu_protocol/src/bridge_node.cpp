@@ -123,6 +123,20 @@ void BridgeNode::readLoop()
       want_handshake_ = false;
       mcu_version_ = 0;
       RCLCPP_INFO(get_logger(), "串口已打开：%s @ %d", device_.c_str(), baud_);
+      if (!port_.exclusive()) {
+        // 没拿到独占不影响本节点收发，但意味着**别人也能同时打开这个口往里写**。
+        // 两个进程同时发命令帧时，MCU 收到的是两路交错的序号，表现为「命令时而
+        // 生效时而不生效」；而 last_cmd_seq 回声会在两个序列间跳，看起来像丢帧。
+        // 这种故障事后极难定位，所以哪怕只是没拿到保证，也要留一条记录。
+        //
+        // 接 pty 模拟器时这条会正常出现（另一端持有 master fd），不是问题。
+        RCLCPP_WARN(
+          get_logger(),
+          "未取得串口独占（TIOCEXCL: %s）。本节点仍可正常收发，但其他进程也能同时"
+          "打开 %s 并写入命令帧 —— 若出现「命令间歇性不生效」，先确认没有第二个"
+          "进程在占用这个口（fuser -v %s）",
+          port_.exclusiveError().c_str(), device_.c_str(), device_.c_str());
+      }
       publishLinkStatus();
     }
 
@@ -298,8 +312,15 @@ void BridgeNode::handleEvents(const LinkEvents & ev, const Frame & f)
       f.mcu_time_ms, f.last_cmd_seq);
   }
   if (ev.left_safe_state) {
-    RCLCPP_INFO(
-      get_logger(), "MCU 退出安全状态，恢复执行命令（MCU 时间 %u ms）", f.mcu_time_ms);
+    // bit0 落下有两条完全不同的原因，说错了会把人带向错误方向：
+    //   a) 命令恢复，MCU 重新执行 —— 真的好消息；
+    //   b) MCU 在安全态满 2 s，退回未握手态重整（状态字节变成 0x04）—— 此时
+    //      输出仍然是零，只是不再报「安全态」而是报「未握手」。
+    // 情形 b 说成「恢复执行命令」是错的，交给下面的 handshake_lost 去说。
+    if ((f.status & kStatusNotHandshaked) == 0) {
+      RCLCPP_INFO(
+        get_logger(), "MCU 退出安全状态，恢复执行命令（MCU 时间 %u ms）", f.mcu_time_ms);
+    }
   }
 
   if (ev.entered_cmd_stale) {
@@ -309,7 +330,10 @@ void BridgeNode::handleEvents(const LinkEvents & ev, const Frame & f)
       "MCU 命令过期（200~500 ms 无新命令），仍在执行最新命令。"
       "再无命令将于 500 ms 进入安全状态");
   }
-  if (ev.left_cmd_stale) {
+  if (ev.left_cmd_stale && (f.status & kStatusSafeState) == 0) {
+    // 只在**没有同时进安全态**时才报解除。恶化到安全态时 MCU 会清掉 bit1、置起
+    // bit0（契约 1.4：两位互斥，安全态取代过期态），此时报「过期状态解除」会紧跟
+    // 在安全态告警后面，读起来像坏消息之后接了个好消息。
     RCLCPP_INFO(get_logger(), "MCU 命令过期状态解除");
   }
 
@@ -416,10 +440,12 @@ void BridgeNode::onCommandTimer()
   // 取最新命令。零阶保持：上游发布频率自由，由本定时器按固定周期送出。
   std::array<float, kCommandFloats> values{};
   bool fresh = false;
+  bool never_had_cmd = false;
   {
     std::lock_guard<std::mutex> lk(cmd_mutex_);
     const int64_t age = nowMs() - latest_cmd_ms_;
     fresh = have_cmd_ && age <= cmd_timeout_ms_;
+    never_had_cmd = !have_cmd_;
     if (commands_flowing_ != fresh) {
       commands_flowing_ = fresh;
       if (!fresh) {
@@ -440,6 +466,20 @@ void BridgeNode::onCommandTimer()
   }
 
   if (!fresh) {
+    if (never_had_cmd) {
+      // 从未收到过任何命令 —— 这是最常见也最容易看不懂的情形：接线和握手都正常，
+      // MCU 却每 2.5 s 报一次进安全态。上面那条「停止发送」的边沿日志在这里不会
+      // 触发（commands_flowing_ 初值就是 false，状态没有变化），所以必须另外说。
+      //
+      // 节流到 5 s：说清原因即可，不必跟着 20 Hz 刷。
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "尚未收到任何 ~/cmd，因此**不发送命令帧** —— MCU 会持续处于安全状态"
+        "（输出全零、每 2 s 重整握手）。这是预期行为，不是故障。"
+        "命令入口：ros2 topic pub %s/cmd mcu_protocol_msgs/msg/McuCommand "
+        "\"{values: [0,0,0,0,0,0,0,0]}\" -r 20",
+        get_name());
+    }
     return;  // 停发。交给 MCU 看门狗。
   }
 

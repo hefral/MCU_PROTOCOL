@@ -31,8 +31,12 @@ public:
   SerialPort(const SerialPort &) = delete;
   SerialPort & operator=(const SerialPort &) = delete;
 
-  /// 打开并按协议要求配置（921600 8N1、raw、无流控）。
+  /// 打开并按协议要求配置（921600 8N1、raw、无流控），并尝试取得独占访问。
   /// 失败返回 false，错误原因写入 error。
+  ///
+  /// 独占（TIOCEXCL）失败**不算失败** —— 见 exclusive()。设不上只意味着没拿到
+  /// 排他保证，不意味着这个口不能用；把加固措施做成硬性前提会让节点在某些
+  /// tty 驱动上完全起不来。
   bool open(const std::string & device, uint32_t baud, std::string & error);
 
   void close() noexcept;
@@ -52,9 +56,16 @@ public:
 
   const std::string & device() const noexcept { return device_; }
 
+  /// 是否成功取得独占访问（TIOCEXCL）。false 不是错误 —— 见 open() 的说明 ——
+  /// 但意味着另一个进程仍可能同时打开这个口并往里写命令帧，值得警告一次。
+  bool exclusive() const noexcept { return exclusive_; }
+  const std::string & exclusiveError() const noexcept { return excl_error_; }
+
 private:
   int fd_ = -1;
   std::string device_;
+  bool exclusive_ = false;
+  std::string excl_error_;
 };
 
 }  // namespace mcu_protocol

@@ -118,6 +118,57 @@ TEST(LinkState, CmdStaleAndSafeStateAreIndependentBits)
   EXPECT_FALSE(ev.entered_cmd_stale) << "cmd_stale 已经是 1，不该重复报";
 }
 
+TEST(LinkState, SafeStateSupersedesCmdStalePerContract)
+{
+  // 契约 1.4：bit0 与 bit1 互斥，安全态取代过期态。所以恶化到安全态时 MCU 会
+  // **清掉 bit1、置起 bit0**，于是同一帧里既有 entered_safe_state 也有
+  // left_cmd_stale。节点若无条件地为 left_cmd_stale 打「过期状态解除」，那条
+  // INFO 会紧跟在安全态告警后面，读起来像坏消息之后接了个好消息。
+  //
+  // 这个组合是接模拟器实跑时看出来的，日志里就是这么挨着出现的两行。
+  LinkState s;
+  s.onUplinkFrame(uplink(kImu, 0, 1000, 0), 0);
+  s.onUplinkFrame(uplink(kImu, 1, 1200, kStatusCmdStale), 200);
+
+  const auto ev = s.onUplinkFrame(uplink(kImu, 2, 1500, kStatusSafeState), 500);
+  EXPECT_TRUE(ev.entered_safe_state);
+  EXPECT_TRUE(ev.left_cmd_stale) << "MCU 清 bit1 置 bit0，两个事件必然同帧出现";
+  EXPECT_TRUE(s.safeState());
+  EXPECT_FALSE(s.cmdStale());
+}
+
+TEST(LinkState, SafeStateBitFallsWhenMcuRearmsWithoutRecovery)
+{
+  // bit0 落下有两条完全不同的原因，节点必须能区分：
+  //   a) 命令恢复，MCU 重新执行 —— 状态字节转 0；
+  //   b) 安全态满 2 s，MCU 退回未握手态重整 —— 状态字节变成 0x04，
+  //      **输出仍然是零**，只是不再报「安全态」而是报「未握手」。
+  // 情形 b 说成「恢复执行命令」是错的。区分依据是同帧的未握手位。
+  LinkState s;
+  s.onUplinkFrame(uplink(kImu, 0, 1000, 0), 0);
+  ASSERT_TRUE(s.onUplinkFrame(uplink(kImu, 1, 1500, kStatusSafeState), 500).entered_safe_state);
+
+  // 情形 b：2 s 后 MCU 重整。
+  const auto ev = s.onUplinkFrame(uplink(kImu, 2, 3500, kStatusNotHandshaked), 2500);
+  EXPECT_TRUE(ev.left_safe_state);
+  EXPECT_TRUE(ev.handshake_lost) << "这才是这一刻真正发生的事";
+  EXPECT_TRUE(s.notHandshaked());
+  EXPECT_FALSE(s.handshaked());
+}
+
+TEST(LinkState, SafeStateBitFallsOnGenuineRecovery)
+{
+  // 情形 a：命令恢复，状态字节干净地转 0。
+  LinkState s;
+  s.onUplinkFrame(uplink(kImu, 0, 1000, 0), 0);
+  s.onUplinkFrame(uplink(kImu, 1, 1500, kStatusSafeState), 500);
+
+  const auto ev = s.onUplinkFrame(uplink(kImu, 2, 1600, 0), 600);
+  EXPECT_TRUE(ev.left_safe_state);
+  EXPECT_FALSE(ev.handshake_lost);
+  EXPECT_TRUE(s.handshaked());
+}
+
 TEST(LinkState, VersionMismatchIsReported)
 {
   LinkState s;
