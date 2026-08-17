@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mcu_protocol_msgs</name>
+  <version>0.1.0</version>
+  <description>
+    STM32F103 &lt;-&gt; ROS 2 串口协议 V2 的消息接口。
+
+    独立成包是刻意的：需要收发 MCU 数据的节点只依赖这一个包，不会把串口代码、
+    termios、协议解析一起拖进自己的构建依赖，日后也能换掉驱动实现而不动接口。
+
+    线上字节流格式以 STM32_ROS2_串口通信方案.md 为准，本包不构成协议定义。
+  </description>
+  <maintainer email="hang@todo.invalid">hang</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <depend>std_msgs</depend>
+
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
