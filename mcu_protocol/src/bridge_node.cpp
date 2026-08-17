@@ -276,13 +276,34 @@ void BridgeNode::onFrame(const Frame & f, int64_t now_ms)
         msg.last_cmd_age_ms = d->last_cmd_age_ms;
         pub_diag_->publish(msg);
       }
-      // 这两项持续增长意味着 MCU 侧真的丢了字节，不只是某帧格式不对。
-      if (d->rx_overrun > 0 || d->rx_dma_lost > 0) {
-        RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 10000,
-          "MCU 侧丢字节：rx_overrun=%u rx_dma_lost=%u（主循环被拖延或环形缓冲追尾）",
+      // MCU 侧丢字节。**按增量报，不按非零报** —— 这两个计数器是累加型的，
+      // 「非零就告警」会让一次早已过去的溢出永久刷屏（实测：上电两小时前的注错
+      // 测试留下 rx_overrun=22，此后每 10 s 重复一次同样的 WARN，指向一个不存在
+      // 的当前故障）。真正要告警的是「又丢了」，不是「曾经丢过」。
+      //
+      // MCU 复位后计数器归零，此时增量为负；不报，交给 mcu_restarted 去说。
+      if (have_prev_diag_counts_) {
+        const bool ore_up = d->rx_overrun > prev_rx_overrun_;
+        const bool dma_up = d->rx_dma_lost > prev_rx_dma_lost_;
+        if (ore_up || dma_up) {
+          RCLCPP_WARN(
+            get_logger(),
+            "MCU 侧新增丢字节：rx_overrun +%u（累计 %u）rx_dma_lost +%u（累计 %u）。"
+            "主循环被拖延或环形缓冲追尾 —— 此刻正在发生，不是历史遗留",
+            d->rx_overrun - prev_rx_overrun_, d->rx_overrun,
+            d->rx_dma_lost - prev_rx_dma_lost_, d->rx_dma_lost);
+        }
+      } else if (d->rx_overrun > 0 || d->rx_dma_lost > 0) {
+        // 首帧：只说一次「板子历史上丢过」，明确它可能来自本次运行之前。
+        RCLCPP_INFO(
+          get_logger(),
+          "MCU 侧历史丢字节计数非零：rx_overrun=%u rx_dma_lost=%u。"
+          "计数器自 MCU 上电起累加，可能来自本节点启动之前；后续只在新增时告警",
           d->rx_overrun, d->rx_dma_lost);
       }
+      prev_rx_overrun_ = d->rx_overrun;
+      prev_rx_dma_lost_ = d->rx_dma_lost;
+      have_prev_diag_counts_ = true;
       break;
     }
 

@@ -103,6 +103,16 @@ private:
 
   uint16_t cmd_seq_ = 1;       ///< 下行命令序号，仅命令定时器线程访问
   uint16_t ack_seq_ = 1;       ///< HELLO_ACK 序号，同上
+
+  /// 上一次诊断帧里的 MCU 侧丢字节计数，仅读线程访问（诊断帧在那里处理）。
+  ///
+  /// 存在的理由：这两个计数器是**累加型、只增不减**，所以「非零就告警」等于
+  /// 电平触发 —— 板子历史上溢出过一次，之后每帧诊断都会命中，告警永久刷屏。
+  /// 实测就是这样：上电两小时前的注错测试留下 rx_overrun=22，此后每 10 s
+  /// 重复一次同样的 WARN，而那 22 次早已过去。改成只在**增量**时报。
+  uint32_t prev_rx_overrun_ = 0;
+  uint32_t prev_rx_dma_lost_ = 0;
+  bool have_prev_diag_counts_ = false;
   uint16_t last_echo_seen_ = 0;
   bool downlink_healthy_ = false;
 
