@@ -1,0 +1,384 @@
+#!/usr/bin/env python3
+"""单屏实时查看 mcu_bridge 的遥测。调试工具，不在控制路径上。
+
+为什么不直接用 `ros2 topic echo`：20 Hz 下 12 个浮点数滚屏太快读不了，而且 echo
+只能回答「有没有数据」。上行是否**真的**健康要看帧率、序号空洞、链路状态位，
+这三样 echo 都不给（仓库根 README「层次 3」讲的就是这件事：判据不是「有话题」）。
+
+四条刻意的实现决定：
+
+1. **刷新率与数据率解耦。** 屏幕固定重画，每次取最近一帧。跟着 20 Hz 刷等于让人
+   读不了。
+
+2. **必须标出「已停止」。** 静止的画面和活着的数据在屏幕上完全一样 —— 这是最容易
+   自欺的一种失效模式。超过判停阈值没有新帧就在块首行写明，并显示距上一帧多久。
+
+3. **QoS 与发布端对齐。** `imu_raw` / `env` 是 best_effort 发布的，用默认
+   (reliable) 订阅**不会匹配**：话题存在、`topic hz` 有数据，而回调一次都不触发，
+   且没有任何报错。`link_status` 是 transient_local，订阅端也要声明才拿得到那个
+   latched 值。
+
+4. **IMU 的 12 个 float 按下标显示，不标 accel/gyro 之类的名字。** 契约 §6 的顺序
+   与单位尚未定稿，猜出来的字段名会让人以为看到的是已知量 —— 那比不标注更糟。
+
+用法（与 mcu_bridge 分开的终端里跑，它会占满整屏）：
+
+    ros2 run mcu_protocol mcu_monitor
+    ros2 run mcu_protocol mcu_monitor --ros-args -p bridge_ns:=/mcu_bridge
+"""
+
+import sys
+import time
+from collections import deque
+
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+    qos_profile_sensor_data,
+)
+
+from mcu_protocol_msgs.msg import McuDiagnostics, McuEnv, McuImuRaw, McuLinkStatus
+
+# 序号是 uint16，回绕归零。相减必须取模 —— 直接相减在回绕点会得到 65535 这样的
+# 巨大差值，误报一大片丢帧。与 protocol.hpp 里的 seqGap 同语义。
+SEQ_MOD = 1 << 16
+
+class Stream:
+    """一路话题的到达统计。
+
+    速率按**到达时刻**算而不是按 MCU 时间戳算：这里要回答的是「数据现在还在不在
+    流」，而 mcu_time_ms 是 MCU 自己的时钟，MCU 停发之后它自然也就不再更新了。
+    """
+
+    def __init__(self, label, topic, expected_hz, window=40):
+        self.label = label
+        self.topic = topic
+        self.expected_hz = expected_hz
+        self.arrivals = deque(maxlen=window)
+        self.msg = None
+        self.count = 0
+        self.gaps = 0
+        self.dups = 0
+        self.has_seq = False
+        self._prev_seq = None
+        # 判停阈值取三个周期、最少 0.5 s：一两帧的调度抖动不该被报成「停了」，
+        # 而真停了必须在半秒内看出来。
+        self.stale_after = max(0.5, 3.0 / expected_hz) if expected_hz else 3.0
+
+    def update(self, msg):
+        self.msg = msg
+        self.count += 1
+        self.arrivals.append(time.monotonic())
+
+        seq = getattr(msg, 'seq', None)
+        if seq is None:
+            return
+        self.has_seq = True
+        if self._prev_seq is not None:
+            gap = (seq - self._prev_seq) % SEQ_MOD
+            if gap == 0:
+                self.dups += 1
+            elif gap > 1:
+                self.gaps += gap - 1
+        self._prev_seq = seq
+
+    @property
+    def hz(self):
+        # 取满 5 个样本才报速率。两个样本算出来的值噪声极大（实测启动瞬间会显示
+        # 21.8 Hz），而这个数字是用来和「期望 20」对照的 —— 宁可先空着。
+        if len(self.arrivals) < 5:
+            return None
+        span = self.arrivals[-1] - self.arrivals[0]
+        return (len(self.arrivals) - 1) / span if span > 0 else None
+
+    @property
+    def age(self):
+        return None if not self.arrivals else time.monotonic() - self.arrivals[-1]
+
+    @property
+    def stale(self):
+        age = self.age
+        return age is not None and age > self.stale_after
+
+
+class Ink:
+    """ANSI 着色。非 tty（重定向到文件、管道给别的程序）时全部退化成原文 ——
+    否则转义序列会把日志弄成乱码。刻意不做嵌套：每个方法都补 reset。"""
+
+    def __init__(self, enabled):
+        self.on = enabled
+
+    def _wrap(self, code, text):
+        return f'\033[{code}m{text}\033[0m' if self.on else text
+
+    def bold(self, text):
+        return self._wrap('1', text)
+
+    def dim(self, text):
+        return self._wrap('2', text)
+
+    def red(self, text):
+        return self._wrap('31', text)
+
+    def green(self, text):
+        return self._wrap('32', text)
+
+    def yellow(self, text):
+        return self._wrap('33', text)
+
+
+class Screen:
+    """整屏重画。
+
+    用「光标归位 + 逐行清到行尾」而不是「清屏 + 重画」：后者在两次写之间存在一个
+    空屏瞬间，20 Hz 下看起来就是持续闪烁。
+    """
+
+    def __init__(self, out=sys.stdout):
+        self.out = out
+        self.tty = out.isatty()
+
+    def enter(self):
+        if self.tty:
+            self.out.write('\033[2J\033[H\033[?25l')  # 清屏、归位、隐藏光标
+            self.out.flush()
+
+    def leave(self):
+        if self.tty:
+            self.out.write('\033[?25h\n')  # 恢复光标
+            self.out.flush()
+
+    def draw(self, lines):
+        if self.tty:
+            body = ''.join(line + '\033[K\n' for line in lines)
+            self.out.write('\033[H' + body + '\033[J')
+        else:
+            self.out.write('\n'.join(lines) + '\n\n')
+        self.out.flush()
+
+
+class Monitor(Node):
+    def __init__(self):
+        super().__init__('mcu_monitor')
+
+        self.ns = str(self.declare_parameter('bridge_ns', '/mcu_bridge').value).rstrip('/')
+        self.refresh_hz = float(self.declare_parameter('refresh_hz', 5.0).value)
+        # 只用于「实测 vs 期望」的对照显示。契约 1.5/2.2 定的是 20 Hz；改固件节奏后
+        # 改这个参数，否则屏幕上的「期望」会是一句假话。
+        uplink_hz = int(self.declare_parameter('expected_uplink_hz', 20).value)
+
+        self.link = Stream('链路', f'{self.ns}/link_status', 1)
+        self.imu = Stream('IMU ', f'{self.ns}/imu_raw', uplink_hz)
+        self.env = Stream('温压', f'{self.ns}/env', uplink_hz)
+        self.diag = Stream('诊断', f'{self.ns}/diagnostics', 1)
+
+        # 遥测必须用 SensorDataQoS：发布端是 best_effort，默认 reliable 订阅不匹配，
+        # 现象是话题存在而回调永不触发，且没有任何报错。
+        self.create_subscription(
+            McuImuRaw, self.imu.topic, self.imu.update, qos_profile_sensor_data)
+        self.create_subscription(
+            McuEnv, self.env.topic, self.env.update, qos_profile_sensor_data)
+        self.create_subscription(McuDiagnostics, self.diag.topic, self.diag.update, 10)
+
+        latched = QoSProfile(
+            depth=1,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(McuLinkStatus, self.link.topic, self.link.update, latched)
+
+        self.ink = Ink(sys.stdout.isatty())
+        self.screen = Screen()
+        self._diag_base = None
+
+        self.create_timer(1.0 / self.refresh_hz, self.redraw)
+
+    # ------------------------------------------------------------- 块首行
+
+    def stat_line(self, s):
+        """话题、实测速率、序号、空洞 —— 或者「等待」/「已停止」。"""
+        if s.msg is None:
+            return self.ink.yellow(f'{s.label}  {s.topic}   等待首帧…')
+
+        head = f'{s.label}  {s.topic}'
+        if s.stale:
+            return self.ink.red(
+                f'{head}   已停止：{s.age:.1f} s 无新帧（共收 {s.count} 帧）')
+
+        hz = s.hz
+        parts = [head, f'{hz:.2f} Hz' if hz is not None else '— Hz']
+        if s.expected_hz:
+            parts.append(f'期望 {s.expected_hz}')
+        if s.has_seq:
+            parts.append(f'seq {s.msg.seq}')
+            parts.append(f'空洞 {s.gaps}' if s.gaps == 0
+                         else self.ink.red(f'空洞 {s.gaps}'))
+            if s.dups:
+                parts.append(self.ink.red(f'重复 {s.dups}'))
+        parts.append(f'共 {s.count} 帧')
+        return '   '.join(parts)
+
+
+    # --------------------------------------------------------------- 链路
+
+    def link_block(self):
+        s = self.link
+        if s.msg is None:
+            return [
+                self.ink.yellow(f'{s.label}  {s.topic}   等待首帧…'),
+                self.ink.dim('      这个话题是 latched 的，一订阅就该立刻到达；一直空'
+                             '说明 mcu_bridge 没在跑，或者 bridge_ns 不对'),
+            ]
+
+        m = s.msg
+        lines = [f'{s.label}  {s.topic}   MCU 状态字节 0x{m.status:02X}'
+                 f'   共 {s.count} 次更新']
+
+        # 「下行回声无」有两种完全不同的原因，混在一起会把人带向错误方向：上游根本
+        # 没发命令时这是**预期行为**（节点刻意停发，让 MCU 看门狗跑起来）；而命令
+        # 在发却收不到回声，才是下行单向故障。
+        if m.downlink_healthy:
+            downlink = '下行回声 ' + self.ink.green('推进')
+        elif not m.commands_flowing:
+            downlink = '下行回声 ' + self.ink.dim('无（上游未发 ~/cmd，属预期）')
+        else:
+            downlink = '下行回声 ' + self.ink.red('无 —— 命令在发却无回声，疑似 TX 单向故障')
+
+        lines.append('      ' + '   '.join([
+            self.flag('串口', m.serial_open, '打开', '未打开'),
+            self.flag('握手', m.handshaked, '完成', '未完成'),
+            self.flag('上游命令', m.commands_flowing, '在发', '未发'),
+            downlink,
+        ]))
+
+        # MCU 报告的异常位 —— 连同**后果**一起显示。只显示位名等于让人回去翻文档。
+        why = []
+        if m.safe_state:
+            why.append('安全态：MCU 8 路输出已全部归零')
+        if m.cmd_stale:
+            why.append('命令过期 200~500 ms，仍在执行最新命令')
+        if m.not_handshaked:
+            why.append('未握手：MCU 拒收命令帧')
+        if m.version_mismatch:
+            why.append('版本不匹配：这是配置错误，重连不会修好')
+        if not m.serial_open:
+            why.append('串口未打开：设备没插、无 dialout 权限，或已被拔出')
+        for text in why:
+            lines.append('      ' + self.ink.yellow('⚠ ' + text))
+        if not why:
+            lines.append('      ' + self.ink.green('✔ 无异常位'))
+
+        lines.append('      ' + self.ink.dim(
+            f'上行空洞 {m.uplink_gaps}   CRC 错 {m.crc_errors}   '
+            f'重同步 {m.resyncs}   重连 {m.reconnects}'))
+        return lines
+
+    def flag(self, name, ok, yes, no):
+        return f'{name} ' + (self.ink.green(yes) if ok else self.ink.red(no))
+
+
+    # ----------------------------------------------------------- 遥测数值
+
+    def imu_block(self):
+        s = self.imu
+        lines = [self.stat_line(s)]
+        if s.msg is None:
+            return lines
+
+        data = list(s.msg.data)
+        for start in range(0, len(data), 4):
+            row = ''.join(
+                f'[{i:2d}]{data[i]:11.4f}  ' for i in range(start, min(start + 4, len(data))))
+            lines.append('      ' + (self.ink.dim(row) if s.stale else row))
+        return lines
+
+    def env_block(self):
+        s = self.env
+        lines = [self.stat_line(s)]
+        if s.msg is None:
+            return lines
+
+        m = s.msg
+        row = (f'温度 {m.temperature:10.3f} °C        '
+               f'压力 {m.pressure:12.2f} Pa  =  {m.pressure / 100.0:9.2f} hPa')
+        lines.append('      ' + (self.ink.dim(row) if s.stale else row))
+        return lines
+
+    # ----------------------------------------------------------------- 诊断
+
+    def diag_block(self):
+        s = self.diag
+        if s.msg is None:
+            return [self.ink.dim(
+                f'{s.label}  {s.topic}   等待首帧…（1 Hz；'
+                'publish_diagnostics 为 false 时永远不会到）')]
+
+        m = s.msg
+        # MCU 复位后所有计数器归零，基线要跟着重置，否则增量变成负数。
+        if self._diag_base is None or m.rx_frames_ok < self._diag_base.rx_frames_ok:
+            self._diag_base = m
+        base = self._diag_base
+
+        def grow(cur, was):
+            """增长是好事的计数器（收帧数）。"""
+            delta = cur - was
+            return f'{cur}' + (f' (+{delta})' if delta else '')
+
+        def bad(cur, was):
+            """增长意味着链路在恶化的计数器。判据是**增量**，不是非零 —— 非零只说明
+            那条路径曾经执行过，可能来自本次运行之前。"""
+            delta = cur - was
+            return f'{cur}' if delta == 0 else self.ink.red(f'{cur} (+{delta})')
+
+        lines = [self.stat_line(s)]
+        lines.append(
+            f'      MCU 收下行帧 {grow(m.rx_frames_ok, base.rx_frames_ok)}'
+            f'   CRC 错 {bad(m.rx_crc_err, base.rx_crc_err)}'
+            f'   重同步 {bad(m.rx_resync, base.rx_resync)}')
+        lines.append(
+            f'      ORE 丢字节 {bad(m.rx_overrun, base.rx_overrun)}'
+            f'   DMA 丢 {bad(m.rx_dma_lost, base.rx_dma_lost)}'
+            f'   TX 丢 {bad(m.tx_dropped, base.tx_dropped)}'
+            f'   距上一条合法命令 {m.last_cmd_age_ms} ms')
+        lines.append('      ' + self.ink.dim(
+            '括号内是自本监视启动以来的增量；累计值自 MCU 上电起算，可能来自更早'))
+        return lines
+
+
+    # ----------------------------------------------------------------- 整屏
+
+    def redraw(self):
+        lines = [self.ink.bold(
+            f'mcu_bridge 实时遥测   {self.ns}   {time.strftime("%H:%M:%S")}')]
+        for block in (self.link_block, self.imu_block, self.env_block, self.diag_block):
+            lines.append('')
+            lines.extend(block())
+        lines.append('')
+        lines.append(self.ink.dim(
+            f'刷新 {self.refresh_hz:g} Hz，与数据速率无关   '
+            'IMU 的 12 个 float 与温压的单位属契约 §6 待定项，故按下标/原值显示   '
+            'Ctrl-C 退出'))
+        self.screen.draw(lines)
+
+
+def main():
+    rclpy.init()
+    node = Monitor()
+    node.screen.enter()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.screen.leave()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

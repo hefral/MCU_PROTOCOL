@@ -42,6 +42,45 @@ self.create_subscription(McuImuRaw, '/mcu_bridge/imu_raw',
 
 ---
 
+# 实时查看：mcu_monitor
+
+```bash
+ros2 run mcu_protocol mcu_monitor          # 与 mcu_bridge 分开的终端，它会占满整屏
+ros2 run mcu_protocol mcu_monitor --ros-args -p bridge_ns:=/mcu_bridge -p refresh_hz:=5.0
+```
+
+一屏显示四路话题：链路状态位（连同后果，不只是位名）、12 个 IMU float、温压、
+诊断计数器。**不要和 `ros2 launch` 放同一个终端** —— 桥接节点的日志会插进重画里
+把画面搅烂。
+
+三处与 `ros2 topic echo` 的差别，都是为了回答 echo 回答不了的问题：
+
+- **刷新率与数据率解耦**（固定 5 Hz 取最新一帧）。20 Hz 下 12 个浮点滚屏读不了。
+- **显示实测帧率与序号空洞**。上行是否健康的判据是帧率、零空洞、零校验错，
+  echo 一个都不给。
+- **明确标出「已停止」**。静止的画面和活着的数据在屏幕上完全一样 —— 超过判停阈值
+  （三个周期，最少 0.5 s）没有新帧就写明，并显示距上一帧多久。
+
+诊断计数器显示的是**自监视启动以来的增量**，不是「非零就告警」：这些计数器自 MCU
+上电起累加，非零只说明那条路径曾经执行过，可能来自更早。判断链路是否正在恶化要看
+增量。
+
+需要精确的单帧内容、或者要把数据喂给别的程序时，仍然用 `ros2 topic echo`
+（记得带 `--qos-reliability best_effort`，否则遥测话题匹配不上，会一直空等）。
+
+参数：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `bridge_ns` | `/mcu_bridge` | 桥接节点命名空间。launch 里改了节点名要一起改，否则四路话题全是「等待首帧」 |
+| `refresh_hz` | `5.0` | 屏幕重画频率，与数据速率无关 |
+| `expected_uplink_hz` | `20` | 仅用于「实测 vs 期望」对照。改了固件上行节奏就要改它，否则屏幕上的「期望」是一句假话 |
+
+它是 Python 调试工具，只 `exec_depend` rclpy，不在控制路径上；源文件不带 `.py`
+后缀的理由写在 `CMakeLists.txt` 的注释里（与 `--symlink-install` 有关）。
+
+---
+
 # 下发命令
 
 ## 最小示例

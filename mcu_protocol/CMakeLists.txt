@@ -54,6 +54,12 @@ install(TARGETS mcu_bridge DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
+# --- 调试用监视节点（Python）。只 exec_depend rclpy，不进构建依赖 —— 驱动本身
+#     不含 Python。去掉 .py 后缀让命令读起来和 C++ 节点一致。
+#     文件名刻意不带 .py：install(PROGRAMS ... RENAME) 在 --symlink-install 下退化成
+#     **拷贝**，改了源文件却跑着旧版本，而且没有任何提示。不重命名才拿得到符号链接。
+install(PROGRAMS scripts/mcu_monitor DESTINATION lib/${PROJECT_NAME})
+
 # --- 测试。协议层与状态机全部在主机上跑，不需要串口也不需要硬件。
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
