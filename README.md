@@ -134,7 +134,7 @@ MCU 收到了，更不等于 CRC 校验通过了。唯一可信的判据是 **MC
 
 ```bash
 ros2 topic pub /mcu_bridge/cmd mcu_protocol_msgs/msg/McuCommand \
-  "{values: [1.5, -2.25, 3.125, 10.0, -0.5, 100.0, 0.001, -999.875]}" -r 20
+  "{values: [-1.0, -0.75, -0.5, -0.25, 0.25, 0.5, 0.75, 1.0]}" -r 20
 ```
 
 然后看 MCU 的回声：
