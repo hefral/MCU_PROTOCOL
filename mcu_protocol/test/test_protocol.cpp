@@ -34,13 +34,18 @@ std::vector<uint8_t> fromHex(const std::string & hex)
 
 // 契约文档 §3 的参考帧，由 MCU 端代码实际生成。
 const char * kHelloHex =
-  "AA 55 03 11 00 00 E8 03 00 00 00 00 04 02 0C 02 14 14 00 00 00 95 1C";
+  "AA 55 03 11 00 00 E8 03 00 00 00 00 04 03 10 02 14 14 00 00 00 89 11";
 const char * kEnvHex =
   "AA 55 02 11 07 00 40 E2 01 00 2A 00 00 33 33 9B 40 A0 F5 C3 48 AF CD";
-const char * kHelloAckHex = "AA 55 11 06 01 00 02 01 00 00 B7 62";
+const char * kHelloAckHex = "AA 55 11 06 01 00 03 01 00 00 B6 9E";
 const char * kCmdHex =
   "AA 55 10 22 01 00 00 00 00 00 00 00 80 3E 00 00 00 BF 00 00 80 3F"
   " 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 E5 2A";
+const char * kImuHex =
+  "AA 55 01 49 01 00 E8 03 00 00 00 00 04 00 00 00 00 00 00 80 3F"
+  " 00 00 00 40 00 00 40 40 00 00 80 40 00 00 A0 40 00 00 C0 40"
+  " 00 00 E0 40 00 00 00 41 00 00 10 41 00 00 20 41 00 00 30 41"
+  " 00 00 40 41 00 00 50 41 00 00 60 41 00 00 70 41 B3 F1";
 
 /// 收集解析出的帧，供断言使用。payload 指向解析器内部缓冲，必须在回调里拷走。
 struct Collected
@@ -80,7 +85,7 @@ TEST(Crc, ReferenceFramesCheckOut)
 {
   // 覆盖范围是从类型字节起 len + 2 字节。把帧头也算进去、或漏掉类型字节，
   // 都会让这四帧全部失败。
-  for (const char * hex : {kHelloHex, kEnvHex, kHelloAckHex, kCmdHex}) {
+  for (const char * hex : {kHelloHex, kEnvHex, kHelloAckHex, kCmdHex, kImuHex}) {
     const auto raw = fromHex(hex);
     const uint8_t len = raw[3];
     ASSERT_EQ(raw.size(), 4u + len + 2u) << "整帧长应为 4 + len + 2: " << hex;
@@ -127,6 +132,27 @@ TEST(Decode, HelloFieldsMatchContract)
   EXPECT_EQ(20u, h->downlink_hz);
 }
 
+TEST(Decode, ImuFloatsIncludeQuaternion)
+{
+  Parser p;
+  const auto got = parseAll(p, fromHex(kImuHex));
+  ASSERT_EQ(1u, got.size());
+  ASSERT_EQ(64u, got[0].payload.size());
+
+  Frame f;
+  f.type = got[0].type;
+  f.payload = got[0].payload.data();
+  f.payload_len = got[0].payload.size();
+  const auto imu = decodeImu(f);
+  ASSERT_TRUE(imu.has_value());
+  ASSERT_EQ(16u, imu->size());
+  for (size_t i = 0; i < imu->size(); ++i) {
+    EXPECT_FLOAT_EQ(static_cast<float>(i), (*imu)[i]);
+  }
+  EXPECT_FLOAT_EQ(12.0f, (*imu)[12]);  // quaternion W
+  EXPECT_FLOAT_EQ(15.0f, (*imu)[15]);  // quaternion Z
+}
+
 TEST(Decode, EnvFloatsAreLittleEndian)
 {
   // 若解出 -1.6e38 之类的值，是字节序错了（指南 §3）。
@@ -148,7 +174,7 @@ TEST(Decode, EnvFloatsAreLittleEndian)
 
 TEST(Encode, HelloAckMatchesReferenceBytes)
 {
-  // 参考帧是 seq=1, version=2, cmd_layout=1。字节级相等，不是「长度对就行」。
+  // 参考帧是 seq=1, version=3, cmd_layout=1。字节级相等，不是「长度对就行」。
   const auto got = encodeHelloAck(1, kProtocolVersion, 1);
   EXPECT_EQ(fromHex(kHelloAckHex), got);
   EXPECT_EQ(12u, got.size());
@@ -282,11 +308,11 @@ TEST(Parser, IdleTimeoutRescuesFrameStuckBehindFakeHeader)
 {
   // 这是整个解析器最关键的一项，也是 MCU 端主机测试发现过真实缺陷的地方。
   //
-  // 伪帧头 AA 55 01 39 声称一帧 63 字节，解析器认下它并等待剩余字节。此时一帧
+  // 伪帧头 AA 55 01 49 声称一帧 79 字节，解析器认下它并等待剩余字节。此时一帧
   // CRC 完全正确的帧已经排在它后面进了缓冲区，却不会被交付 —— 因为按字节内容
   // 无法区分「真帧被截断（该等）」和「伪帧头挡住真帧且不会再有新字节（该重扫）」。
   // 只有时间能区分。
-  std::vector<uint8_t> bytes{0xAA, 0x55, 0x01, 0x39};
+  std::vector<uint8_t> bytes{0xAA, 0x55, 0x01, 0x49};
   const auto hello = fromHex(kHelloHex);
   bytes.insert(bytes.end(), hello.begin(), hello.end());
 
@@ -314,7 +340,7 @@ TEST(Parser, IdleResyncDropsOnlyOneByte)
   // 只丢 1 字节、不清空缓冲区（契约 3.1 规则 3）。若实现成清空缓冲区，
   // 上面那一项会「看起来也过」—— 但排在伪帧头后面的真帧会被一起丢掉。
   // 这里用两帧来区分这两种实现。
-  std::vector<uint8_t> bytes{0xAA, 0x55, 0x01, 0x39};
+  std::vector<uint8_t> bytes{0xAA, 0x55, 0x01, 0x49};
   for (const char * hex : {kHelloHex, kEnvHex}) {
     const auto x = fromHex(hex);
     bytes.insert(bytes.end(), x.begin(), x.end());
@@ -335,7 +361,7 @@ TEST(Parser, IdleTimerTracksLastByteNotCandidateStart)
 {
   // 计时基准是最近一次收到字节的时刻。若错按「候选帧头出现的时刻」计时，
   // 持续但缓慢的字节流会被反复误判为滞留。
-  std::vector<uint8_t> head{0xAA, 0x55, 0x01, 0x39};
+  std::vector<uint8_t> head{0xAA, 0x55, 0x01, 0x49};
   Parser p;
   std::vector<uint8_t> types;
   auto cb = [&types](const Frame & f) {types.push_back(f.type);};

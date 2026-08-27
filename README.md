@@ -219,7 +219,7 @@ ros2 topic echo /mcu_bridge/diagnostics --once
 ## 帧率正常、序号连续，但载荷全是零
 
 **链路是好的，数据源没接上。** 判据是「其他字段仍在动」：`seq` 推进、`mcu_time_ms`
-增长、`crc_errors` 与 `resyncs` 为零，只有 12 个 IMU float 和温压是 0。
+增长、`crc_errors` 与 `resyncs` 为零，只有 16 个 IMU float 和温压是 0。
 
 这种情况**不要去查线和波特率**。线或波特率坏掉的表现是 CRC 错、重同步增长、
 帧率不足 —— 不是干净的零。零是一个**被正确传输的值**。
@@ -294,10 +294,10 @@ tty：`fuser -v /dev/ttyUSB0`。
 
 三处可能引起疑问的决定，都是刻意的：
 
-**上行不映射成 `sensor_msgs/Imu`。** 当前 `float32[12]` 顺序和单位已经确定为
+**上行不映射成 `sensor_msgs/Imu`。** 当前 `float32[16]` 顺序和单位已经确定为
 `ax_g, ay_g, az_g, gx_deg_s, gy_deg_s, gz_deg_s, mx_uT, my_uT, mz_uT, roll_deg,
-pitch_deg, yaw_deg`。保持原始数组可以避免把坐标系、时间语义和姿态表示固化到协议消息，
-具体映射留给上层。
+pitch_deg, yaw_deg, quaternion_w, quaternion_x, quaternion_y, quaternion_z`。保持原始数组
+可以避免把坐标系、时间语义和姿态表示固化到协议消息，具体映射留给上层。
 
 **命令超时后停发，不重发旧命令。** 让 MCU 那条已实测的安全路径真正跑起来。继续
 重发会让 MCU 以为链路健康，把「上游节点挂了」伪装成「一切正常」—— 这是最坏的

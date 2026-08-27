@@ -1,4 +1,4 @@
-// STM32F103 <-> ROS 2 串口协议 V2 的编解码。
+// STM32F103 <-> ROS 2 串口协议 V3 的编解码。
 //
 // 本文件及 protocol.cpp / parser.cpp 不包含任何 ROS 头文件。这条纪律是从 MCU 端
 // 抄来的（那边 proto_crc / proto_frame 不含 HAL 头），理由相同：CRC 参数、字节序、
@@ -25,7 +25,7 @@ constexpr uint32_t kBaudRate = 921600;
 constexpr uint8_t kSyncByte0 = 0xAA;
 constexpr uint8_t kSyncByte1 = 0x55;
 
-constexpr uint8_t kProtocolVersion = 2;
+constexpr uint8_t kProtocolVersion = 3;
 
 /// 长度字段上界（契约 1.1）。超限即判伪帧头。
 constexpr uint8_t kMaxLen = 128;
@@ -66,7 +66,7 @@ constexpr int kCommandPeriodMs = 50;
 
 /// 命令帧的 8 个 float。语义由 cmd_layout 声明（契约 §6 待定）。
 constexpr size_t kCommandFloats = 8;
-constexpr size_t kImuFloats = 12;
+constexpr size_t kImuFloats = 16;
 constexpr size_t kEnvFloats = 2;
 
 // ---------------------------------------------------------------- CRC
@@ -127,7 +127,7 @@ std::optional<std::array<float, kEnvFloats>> decodeEnv(const Frame & f) noexcept
 
 // ---------------------------------------------------------------- 编码
 
-/// HELLO_ACK（0x11，12 B）。version 必须填 2 —— 填错 MCU 进「版本不匹配」态：
+/// HELLO_ACK（0x11，12 B）。version 必须填 3 —— 填错 MCU 进「版本不匹配」态：
 /// 不进正常模式、状态字节置 bit3、继续发 HELLO。这是刻意的，静默按不兼容格式
 /// 运行是最坏结果。
 std::vector<uint8_t> encodeHelloAck(

@@ -4,7 +4,7 @@
   <name>mcu_protocol_msgs</name>
   <version>0.1.0</version>
   <description>
-    STM32F103 &lt;-&gt; ROS 2 串口协议 V2 的消息接口。
+    STM32F103 &lt;-&gt; ROS 2 串口协议 V3 的消息接口。
 
     独立成包是刻意的：需要收发 MCU 数据的节点只依赖这一个包，不会把串口代码、
     termios、协议解析一起拖进自己的构建依赖，日后也能换掉驱动实现而不动接口。

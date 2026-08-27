@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """单屏实时查看 mcu_bridge 的遥测。调试工具，不在控制路径上。
 
-为什么不直接用 `ros2 topic echo`：20 Hz 下 12 个浮点数滚屏太快读不了，而且 echo
+为什么不直接用 `ros2 topic echo`：20 Hz 下 16 个浮点数滚屏太快读不了，而且 echo
 只能回答「有没有数据」。上行是否**真的**健康要看帧率、序号空洞、链路状态位，
 这三样 echo 都不给（仓库根 README「层次 3」讲的就是这件事：判据不是「有话题」）。
 
@@ -18,8 +18,8 @@
    且没有任何报错。`link_status` 是 transient_local，订阅端也要声明才拿得到那个
    latched 值。
 
-4. **IMU 的 12 个 float 按下标显示，不标 accel/gyro 之类的名字。** 契约 §6 的顺序
-   与单位尚未定稿，猜出来的字段名会让人以为看到的是已知量 —— 那比不标注更糟。
+4. **IMU 的 16 个 float 按下标显示，不标 accel/gyro 之类的名字。** 契约 §6 的顺序
+   与单位已由协议 V3 固定，具体字段映射见 `McuImuRaw.data` 的上层说明。
 
 用法（与 mcu_bridge 分开的终端里跑，它会占满整屏）：
 
@@ -360,7 +360,7 @@ class Monitor(Node):
         lines.append('')
         lines.append(self.ink.dim(
             f'刷新 {self.refresh_hz:g} Hz，与数据速率无关   '
-            'IMU 的 12 个 float 与温压的单位属契约 §6 待定项，故按下标/原值显示   '
+            'IMU 的 16 个 float 按下标/原值显示   '
             'Ctrl-C 退出'))
         self.screen.draw(lines)
 

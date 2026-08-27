@@ -49,13 +49,13 @@ ros2 run mcu_protocol mcu_monitor          # 与 mcu_bridge 分开的终端，�
 ros2 run mcu_protocol mcu_monitor --ros-args -p bridge_ns:=/mcu_bridge -p refresh_hz:=5.0
 ```
 
-一屏显示四路话题：链路状态位（连同后果，不只是位名）、12 个 IMU float、温压、
+一屏显示四路话题：链路状态位（连同后果，不只是位名）、16 个 IMU float、温压、
 诊断计数器。**不要和 `ros2 launch` 放同一个终端** —— 桥接节点的日志会插进重画里
 把画面搅烂。
 
 三处与 `ros2 topic echo` 的差别，都是为了回答 echo 回答不了的问题：
 
-- **刷新率与数据率解耦**（固定 5 Hz 取最新一帧）。20 Hz 下 12 个浮点滚屏读不了。
+- **刷新率与数据率解耦**（固定 5 Hz 取最新一帧）。20 Hz 下 16 个浮点滚屏读不了。
 - **显示实测帧率与序号空洞**。上行是否健康的判据是帧率、零空洞、零校验错，
   echo 一个都不给。
 - **明确标出「已停止」**。静止的画面和活着的数据在屏幕上完全一样 —— 超过判停阈值
@@ -198,14 +198,19 @@ void MyNode::onLinkStatus(const McuLinkStatus::SharedPtr s)
 
 # 遥测数据是原始浮点数组
 
-`McuImuRaw.data` 是 `float32[12]`，当前顺序和单位为：
+`McuImuRaw.data` 是 `float32[16]`，当前顺序和单位为：
 
 ```text
 [0] ax_g       [1] ay_g       [2] az_g
 [3] gx_deg_s   [4] gy_deg_s   [5] gz_deg_s
 [6] mx_uT      [7] my_uT      [8] mz_uT
 [9] roll_deg  [10] pitch_deg [11] yaw_deg
+[12] quaternion_w [13] quaternion_x [14] quaternion_y [15] quaternion_z
 ```
+
+IMU 完整帧为 79 B，`len=0x49`，数据区从完整帧偏移 13 开始；四元数 W/X/Y/Z
+分别位于字节 61..64、65..68、69..72、73..76，均为小端 `float32`。协议版本为 V3，
+HELLO_ACK 必须回复版本 3，`cmd_layout` 保持不变。
 
 `McuEnv` 的两个字段依次为 `temperature`（°C）和 `pressure`（Pa）。
 对应环境数据顺序为 `[0] temperature_degC`、`[1] pressure_Pa`。

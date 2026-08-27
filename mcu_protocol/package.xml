@@ -4,7 +4,7 @@
   <name>mcu_protocol</name>
   <version>0.1.0</version>
   <description>
-    STM32F103VET6 串口协议 V2 的 ROS 2 桥接驱动。
+    STM32F103VET6 串口协议 V3 的 ROS 2 桥接驱动。
 
     分层刻意做得很清楚：protocol / parser / serial_port / link_state 四层不含任何
     ROS 头文件，可以在主机上用契约文档的参考帧做单元测试，一轮迭代几秒。CRC 参数、
