@@ -46,7 +46,7 @@ sudo apt install python3-pyqt5 python3-pyqtgraph
 
 窗口是单屏左右布局：
 
-- 左侧为传感器区域，显示温度、绝对压力、淡水深度、IMU 数值表和 4 组 XYZ 曲线。
+- 左侧为传感器区域，显示温度、绝对压力、淡水深度、IMU 数值表、四元数和 4 组 XYZ 曲线。
 - 右侧为电机测试区域，8 路电机从上到下排列，每路包含滑块、三位小数输入框和归零按钮。
 - 顶部状态条显示串口、握手、上行、命令流、下行回声和 MCU 安全状态。
 - 底部诊断栏显示 MCU 接收帧、CRC、重同步、丢字节和最近命令年龄等累计值。
@@ -57,18 +57,20 @@ sudo apt install python3-pyqt5 python3-pyqtgraph
 
 ### IMU
 
-`McuImuRaw.data` 的 12 个 float 按四组显示，界面和当前 MCU 数据契约使用以下顺序：
+`McuImuRaw.data` 的 16 个 float 按四组数据和一组四元数显示，界面和当前 MCU 数据契约使用以下顺序：
 
 ```text
 [0] ax_g       [1] ay_g       [2] az_g
 [3] gx_deg_s   [4] gy_deg_s   [5] gz_deg_s
 [6] mx_uT      [7] my_uT      [8] mz_uT
 [9] roll_deg  [10] pitch_deg [11] yaw_deg
+[12] quaternion_w [13] quaternion_x [14] quaternion_y [15] quaternion_z
 ```
 
 界面分别显示加速度（`g`）、角速度（`deg/s`）、磁力计（`uT`）和姿态角（`deg`），表格单元格
-和曲线图例使用对应字段名。曲线显示最近一段历史数据；顶部“窗口”可选择 `10 s`、`30 s` 或
-`60 s`，垃圾桶按钮清空历史曲线，“暂停曲线”只暂停绘图，不停止 ROS 数据接收。
+使用 `X/Y/Z` 列头；四元数在表格下方单独显示 `W/X/Y/Z` 四个数值。曲线图例使用对应字段名，
+但只绘制前四组数据，不单独绘制四元数。曲线显示最近一段历史数据；顶部“窗口”可选择 `10 s`、
+`30 s` 或 `60 s`，垃圾桶按钮清空历史曲线，“暂停曲线”只暂停绘图，不停止 ROS 数据接收。
 
 ### 温度、压力和深度
 

@@ -47,7 +47,7 @@ source install/setup.bash
 ros2 run mcu_dashboard mcu_dashboard
 ```
 
-窗口默认左侧显示温度、绝对压力（hPa）、淡水深度（m）和四组 IMU XYZ 曲线，右侧显示 8 路
+窗口默认左侧显示温度、绝对压力（hPa）、淡水深度（m）、四元数和四组 IMU XYZ 曲线，右侧显示 8 路
 电机测试控件。电机输出默认未使能；只有勾选 20 Hz 命令发布后才会向 `~/cmd` 发送命令。
 停止时窗口先发 4 帧全零再停发，详细操作和安全判据见
 [`mcu_dashboard/README.md`](mcu_dashboard/README.md)。

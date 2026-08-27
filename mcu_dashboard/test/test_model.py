@@ -28,13 +28,13 @@ def test_depth_rejects_invalid_inputs(pressure, reference, density):
         depth_from_pressure(pressure, reference, density)
 
 
-def test_store_groups_twelve_imu_values_and_tracks_seq_gaps():
+def test_store_groups_sixteen_imu_values_and_tracks_seq_gaps():
     store = TelemetryStore(history_seconds=1.0, expected_hz=20.0)
-    store.update_imu(10, 3, tuple(range(12)))
-    store.update_imu(12, 4, tuple(range(12, 24)))
+    store.update_imu(10, 3, tuple(range(16)))
+    store.update_imu(12, 4, tuple(range(16, 32)))
 
     snapshot = store.snapshot()
-    assert snapshot.imu_values[-1] == tuple(float(value) for value in range(12, 24))
+    assert snapshot.imu_values[-1] == tuple(float(value) for value in range(16, 32))
     assert snapshot.imu_metrics.count == 2
     assert snapshot.imu_metrics.gaps == 1
     assert snapshot.last_cmd_seq == 4
@@ -50,7 +50,7 @@ def test_store_handles_uint16_sequence_wrap_without_gap():
 
 def test_clear_history_keeps_latest_status_and_counters():
     store = TelemetryStore()
-    store.update_imu(1, 0, (0.0,) * 12)
+    store.update_imu(1, 0, (0.0,) * 16)
     store.note_command_published()
     store.clear_history()
 

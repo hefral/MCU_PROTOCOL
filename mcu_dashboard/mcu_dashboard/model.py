@@ -143,7 +143,7 @@ class TelemetryStore:
         self._commands_published = 0
 
     def update_imu(self, seq: int, last_cmd_seq: int, values: Sequence[float]) -> None:
-        if len(values) != 12:
+        if len(values) != 16:
             return
         now = time.monotonic()
         sample = tuple(float(value) for value in values)

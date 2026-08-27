@@ -14,6 +14,7 @@ IMU_GROUPS = (
     ('磁力计', 'uT', ('mx_uT', 'my_uT', 'mz_uT')),
     ('姿态角', 'deg', ('roll_deg', 'pitch_deg', 'yaw_deg')),
 )
+QUATERNION_FIELDS = ('quaternion_w', 'quaternion_x', 'quaternion_y', 'quaternion_z')
 
 
 class StatusBadge(QtWidgets.QLabel):
@@ -280,7 +281,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(heading)
 
         self.imu_table = QtWidgets.QTableWidget(4, 4)
-        self.imu_table.setHorizontalHeaderLabels(('数据组', '轴 1', '轴 2', '轴 3'))
+        self.imu_table.setHorizontalHeaderLabels(('数据组', 'X', 'Y', 'Z'))
         self.imu_table.verticalHeader().setVisible(False)
         self.imu_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.imu_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
@@ -295,7 +296,7 @@ class MainWindow(QtWidgets.QMainWindow):
             group_item.setToolTip(' / '.join(axes))
             self.imu_table.setItem(row, 0, group_item)
             for column in range(1, 4):
-                item = QtWidgets.QTableWidgetItem(f'{axes[column - 1]}: --')
+                item = QtWidgets.QTableWidgetItem('--')
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
                 item.setToolTip(axes[column - 1])
                 self.imu_table.setItem(row, column, item)
@@ -305,6 +306,30 @@ class MainWindow(QtWidgets.QMainWindow):
         table_height += 2 * self.imu_table.frameWidth() + 2
         self.imu_table.setFixedHeight(table_height)
         layout.addWidget(self.imu_table)
+
+        quaternion_layout = QtWidgets.QGridLayout()
+        quaternion_layout.setContentsMargins(0, 0, 0, 0)
+        quaternion_layout.setHorizontalSpacing(8)
+        quaternion_layout.setVerticalSpacing(2)
+        quaternion_title = QtWidgets.QLabel('四元数')
+        quaternion_title.setObjectName('imuSupplementTitle')
+        quaternion_layout.addWidget(quaternion_title, 0, 0, 2, 1)
+        self.quaternion_values = []
+        for column, (axis, field) in enumerate(
+            zip(('W', 'X', 'Y', 'Z'), QUATERNION_FIELDS), 1
+        ):
+            axis_label = QtWidgets.QLabel(axis)
+            axis_label.setObjectName('imuAxisLabel')
+            axis_label.setAlignment(QtCore.Qt.AlignCenter)
+            quaternion_layout.addWidget(axis_label, 0, column)
+
+            value = QtWidgets.QLabel('--')
+            value.setObjectName('quaternionValue')
+            value.setAlignment(QtCore.Qt.AlignCenter)
+            value.setToolTip(field)
+            self.quaternion_values.append(value)
+            quaternion_layout.addWidget(value, 1, column)
+        layout.addLayout(quaternion_layout)
 
         plots = QtWidgets.QGridLayout()
         plots.setSpacing(8)
@@ -637,11 +662,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refresh_readouts(self, snapshot):
         if snapshot.imu_values:
             latest = snapshot.imu_values[-1]
-            for group, (_, _, axes) in enumerate(IMU_GROUPS):
-                for axis, axis_name in enumerate(axes):
+            for group in range(len(IMU_GROUPS)):
+                for axis in range(3):
                     self.imu_table.item(group, axis + 1).setText(
-                        f'{axis_name}: {latest[group * 3 + axis]:.5f}'
+                        f'{latest[group * 3 + axis]:.5f}'
                     )
+            for index, value_label in enumerate(self.quaternion_values):
+                value_label.setText(f'{latest[12 + index]:.5f}')
 
         if not snapshot.pressures:
             return
@@ -724,6 +751,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 border-radius: 6px;
             }
             QLabel#readoutTitle { color: #5a6872; font-weight: 600; }
+            QLabel#imuSupplementTitle { color: #53616b; font-size: 14px; font-weight: 650; }
+            QLabel#imuAxisLabel { color: #687781; font-weight: 650; }
+            QLabel#quaternionValue { color: #27343c; font-size: 16px; font-weight: 650; }
             QLabel#sliderScale, QLabel#formula { color: #76838c; }
             QLabel#motorTitle { font-size: 14px; font-weight: 650; min-width: 48px; }
             QLabel#commandState { color: #53616b; font-weight: 600; }
