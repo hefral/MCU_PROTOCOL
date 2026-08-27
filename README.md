@@ -5,10 +5,15 @@
 
 - **`mcu_protocol_msgs`** — 五个消息定义，无代码依赖
 - **`mcu_protocol`** — 桥接节点 `mcu_bridge`，含协议、解析、串口、链路状态四层
+- **`mcu_dashboard`** — IMU、温压深度可视化与 8 路电机命令测试窗口
 
 上层怎么用（话题、QoS、接入范式、代码示例）见
 [`mcu_protocol/README.md`](mcu_protocol/README.md)。本文档讲**怎么跑起来**和
 **怎么确认通信正常**。
+
+可视化窗口的完整使用说明见
+[`mcu_dashboard/README.md`](mcu_dashboard/README.md)。它通过 ROS 2 话题接入已经运行的
+`mcu_bridge`，不直接占用串口。
 
 ## 环境
 
@@ -34,6 +39,18 @@ ros2 launch mcu_protocol bridge.launch.py
 ros2 launch mcu_protocol bridge.launch.py device:=/dev/ttyUSB1
 ros2 launch mcu_protocol bridge.launch.py log_level:=debug
 ```
+
+桥接节点已经运行后，可另开一个终端启动可视化窗口：
+
+```bash
+source install/setup.bash
+ros2 run mcu_dashboard mcu_dashboard
+```
+
+窗口默认左侧显示温度、绝对压力（hPa）、淡水深度（m）和四组 IMU XYZ 曲线，右侧显示 8 路
+电机测试控件。电机输出默认未使能；只有勾选 20 Hz 命令发布后才会向 `~/cmd` 发送命令。
+停止时窗口先发 4 帧全零再停发，详细操作和安全判据见
+[`mcu_dashboard/README.md`](mcu_dashboard/README.md)。
 
 参数在 [`mcu_protocol/config/bridge.yaml`](mcu_protocol/config/bridge.yaml)，
 每一项都有注释说明改动后果。命令行传入的 `device` 覆盖文件里的值。
