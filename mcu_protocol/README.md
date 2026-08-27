@@ -198,11 +198,19 @@ void MyNode::onLinkStatus(const McuLinkStatus::SharedPtr s)
 
 # 遥测数据是原始浮点数组
 
-`McuImuRaw.data` 是 `float32[12]`，`McuEnv` 是 temperature/pressure。
+`McuImuRaw.data` 是 `float32[12]`，当前顺序和单位为：
 
-**刻意不映射成 `sensor_msgs/Imu`。** 契约 §6 的 float 顺序与单位尚未定稿，现在
-映射等于把一个待定约定固化进消息类型 —— 而错误的映射比不映射更糟，因为它看起来
-是对的。上层若需要标准消息，自己写一个转换节点，等 §6 定稿后改一处即可。
+```text
+[0] ax_g       [1] ay_g       [2] az_g
+[3] gx_deg_s   [4] gy_deg_s   [5] gz_deg_s
+[6] mx_uT      [7] my_uT      [8] mz_uT
+[9] roll_deg  [10] pitch_deg [11] yaw_deg
+```
+
+`McuEnv` 的两个字段依次为 `temperature`（°C）和 `pressure`（Pa）。
+对应环境数据顺序为 `[0] temperature_degC`、`[1] pressure_Pa`。
+消息仍刻意不映射成 `sensor_msgs/Imu`，因为坐标系、时间语义和姿态表示仍属于上层约定；
+需要标准消息时，在上层转换节点中完成映射。
 
 `header.stamp` 是**本机收到该帧的时刻**，不是 MCU 时间。两个时间基准不能混：
 `mcu_time_ms` 是 MCU 复位后的毫秒数，49.7 天回绕，且与本机时钟无关联。做时间
@@ -269,4 +277,3 @@ auto bridge = std::make_shared<mcu_protocol::BridgeNode>();
 
 读串口用独立线程而不是 ROS 定时器轮询：20 Hz 双帧下每秒约 1720 字节，定时器轮询
 要么周期短到浪费 CPU，要么攒出延迟。
-

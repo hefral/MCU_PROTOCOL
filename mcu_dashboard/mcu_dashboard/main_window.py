@@ -8,7 +8,12 @@ from .model import depth_from_pressure
 
 
 AXIS_COLORS = ('#d1495b', '#16836b', '#2b6cb0')
-GROUP_NAMES = ('第 1 组', '第 2 组', '第 3 组', '第 4 组')
+IMU_GROUPS = (
+    ('加速度', 'g', ('ax_g', 'ay_g', 'az_g')),
+    ('角速度', 'deg/s', ('gx_deg_s', 'gy_deg_s', 'gz_deg_s')),
+    ('磁力计', 'uT', ('mx_uT', 'my_uT', 'mz_uT')),
+    ('姿态角', 'deg', ('roll_deg', 'pitch_deg', 'yaw_deg')),
+)
 
 
 class StatusBadge(QtWidgets.QLabel):
@@ -265,7 +270,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.setSpacing(8)
 
         heading = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel('IMU · 4 组 XYZ')
+        title = QtWidgets.QLabel('IMU · 加速度 / 角速度 / 磁力计 / 姿态角')
         title.setObjectName('sectionTitle')
         heading.addWidget(title)
         heading.addStretch()
@@ -275,7 +280,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(heading)
 
         self.imu_table = QtWidgets.QTableWidget(4, 4)
-        self.imu_table.setHorizontalHeaderLabels(('数据组', 'X', 'Y', 'Z'))
+        self.imu_table.setHorizontalHeaderLabels(('数据组', '轴 1', '轴 2', '轴 3'))
         self.imu_table.verticalHeader().setVisible(False)
         self.imu_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.imu_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
@@ -285,11 +290,14 @@ class MainWindow(QtWidgets.QMainWindow):
         header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
         for column in range(1, 4):
             header.setSectionResizeMode(column, QtWidgets.QHeaderView.Stretch)
-        for row, name in enumerate(GROUP_NAMES):
-            self.imu_table.setItem(row, 0, QtWidgets.QTableWidgetItem(name))
+        for row, (name, unit, axes) in enumerate(IMU_GROUPS):
+            group_item = QtWidgets.QTableWidgetItem(f'{name} ({unit})')
+            group_item.setToolTip(' / '.join(axes))
+            self.imu_table.setItem(row, 0, group_item)
             for column in range(1, 4):
-                item = QtWidgets.QTableWidgetItem('--')
+                item = QtWidgets.QTableWidgetItem(f'{axes[column - 1]}: --')
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
+                item.setToolTip(axes[column - 1])
                 self.imu_table.setItem(row, column, item)
         self.imu_table.resizeRowsToContents()
         table_height = self.imu_table.horizontalHeader().sizeHint().height()
@@ -302,11 +310,11 @@ class MainWindow(QtWidgets.QMainWindow):
         plots.setSpacing(8)
         self.imu_plots = []
         self.imu_curves = []
-        for group in range(4):
-            plot = self._make_plot(GROUP_NAMES[group], '原始值')
+        for group, (name, unit, axes) in enumerate(IMU_GROUPS):
+            plot = self._make_plot(name, unit)
             plot.addLegend(offset=(8, 8), labelTextSize='9pt')
             curves = []
-            for axis, color in zip(('X', 'Y', 'Z'), AXIS_COLORS):
+            for axis, color in zip(axes, AXIS_COLORS):
                 curve = plot.plot(name=axis, pen=pg.mkPen(color, width=1.8))
                 curve.setClipToView(True)
                 curve.setDownsampling(auto=True, method='peak')
@@ -629,10 +637,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refresh_readouts(self, snapshot):
         if snapshot.imu_values:
             latest = snapshot.imu_values[-1]
-            for group in range(4):
-                for axis in range(3):
+            for group, (_, _, axes) in enumerate(IMU_GROUPS):
+                for axis, axis_name in enumerate(axes):
                     self.imu_table.item(group, axis + 1).setText(
-                        f'{latest[group * 3 + axis]:.5f}'
+                        f'{axis_name}: {latest[group * 3 + axis]:.5f}'
                     )
 
         if not snapshot.pressures:

@@ -1,8 +1,12 @@
 # MCU 上行 IMU 帧（类型 0x01，20 Hz，整帧 63 B）。
 #
-# 12 个 float 的排列顺序与单位约定尚未确定（契约 §6 待定项），所以这里保持原始
-# 数组，不映射 sensor_msgs/Imu。猜错字段映射会让下游拿到「看起来对」的错数据 ——
-# 那比拿不到数据更难查。语义定下来后再加标准消息，本消息保持不变。
+# 12 个 float 的排列顺序和单位如下。消息仍保持原始数组，不映射 sensor_msgs/Imu，
+# 以便协议层不绑定具体的坐标系或姿态表示。
+#
+# [0] ax_g       [1] ay_g       [2] az_g
+# [3] gx_deg_s   [4] gy_deg_s   [5] gz_deg_s
+# [6] mx_uT      [7] my_uT      [8] mz_uT
+# [9] roll_deg  [10] pitch_deg [11] yaw_deg
 
 std_msgs/Header header      # stamp 为本机收到该帧的时刻，非 MCU 时间
 

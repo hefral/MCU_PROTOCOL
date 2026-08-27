@@ -57,20 +57,27 @@ sudo apt install python3-pyqt5 python3-pyqtgraph
 
 ### IMU
 
-`McuImuRaw.data` 的 12 个 float 按四组显示：
+`McuImuRaw.data` 的 12 个 float 按四组显示，界面和当前 MCU 数据契约使用以下顺序：
 
 ```text
-第 1 组: data[0]  data[1]  data[2]
-第 2 组: data[3]  data[4]  data[5]
-第 3 组: data[6]  data[7]  data[8]
-第 4 组: data[9]  data[10]  data[11]
+[0] ax_g       [1] ay_g       [2] az_g
+[3] gx_deg_s   [4] gy_deg_s   [5] gz_deg_s
+[6] mx_uT      [7] my_uT      [8] mz_uT
+[9] roll_deg  [10] pitch_deg [11] yaw_deg
 ```
 
-每组当前只标为 `X/Y/Z`，具体传感器名称、顺序和单位尚未固化到协议，确定后再更新界面标注。
-曲线显示最近一段历史数据；顶部“窗口”可选择 `10 s`、`30 s` 或 `60 s`，垃圾桶按钮清空
-历史曲线，“暂停曲线”只暂停绘图，不停止 ROS 数据接收。
+界面分别显示加速度（`g`）、角速度（`deg/s`）、磁力计（`uT`）和姿态角（`deg`），表格单元格
+和曲线图例使用对应字段名。曲线显示最近一段历史数据；顶部“窗口”可选择 `10 s`、`30 s` 或
+`60 s`，垃圾桶按钮清空历史曲线，“暂停曲线”只暂停绘图，不停止 ROS 数据接收。
 
 ### 温度、压力和深度
+
+- `McuEnv` 的环境数组顺序为：
+
+  ```text
+  [0] temperature_degC
+  [1] pressure_Pa
+  ```
 
 - 温度显示单位为 `°C`。
 - 压力按绝对压力接收，显示单位为 `hPa`；例如 `99600 Pa` 显示为 `996.00 hPa`。
