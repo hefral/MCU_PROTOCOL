@@ -29,3 +29,19 @@ mcu_bridge:
     # 是否发布 ~/diagnostics（MCU 1 Hz 诊断帧）。这是链路质量的唯一窗口，
     # 调试期建议保持 true。
     publish_diagnostics: true
+
+    # ~/imu_filtered 的一阶低通截止频率。每组数据在低通前还会经过 3 点因果中值，
+    # 用于消除单帧尖峰。0 表示旁路低通，但仍保留中值滤波和安全门。
+    imu_filter.accel_cutoff_hz: 5.0
+    imu_filter.gyro_cutoff_hz: 5.0
+    imu_filter.mag_cutoff_hz: 2.0
+    imu_filter.orientation_cutoff_hz: 5.0
+
+    # 四元数安全门。范数不在此范围内的整帧不会发布到 ~/imu_filtered；原始帧仍在
+    # ~/imu_raw。默认范围能直接挡住现场出现过的全零或部分归零四元数。
+    imu_filter.quaternion_norm_min: 0.8
+    imu_filter.quaternion_norm_max: 1.2
+
+    # 相邻有效四元数允许的最大姿态变化率。超过时拒绝整帧；0 表示关闭该项安全门。
+    # 该值必须高于载体真实可能达到的最大角速度，并留出采样抖动余量。
+    imu_filter.max_orientation_rate_deg_s: 720.0

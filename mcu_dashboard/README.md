@@ -57,7 +57,9 @@ sudo apt install python3-pyqt5 python3-pyqtgraph
 
 ### IMU
 
-`McuImuRaw.data` 的 16 个 float 按四组数据和一组四元数显示，界面和当前 MCU 数据契约使用以下顺序：
+窗口订阅 `/mcu_bridge/imu_filtered`。该话题由桥接节点对原始 IMU 数据做安全门、中值和低通
+处理后发布；`/mcu_bridge/imu_raw` 留给现场排障。两者的 `McuImuRaw.data` 都是 16 个 float，
+界面和当前 MCU 数据契约使用以下顺序：
 
 ```text
 [0] ax_g       [1] ay_g       [2] az_g
@@ -71,6 +73,10 @@ sudo apt install python3-pyqt5 python3-pyqtgraph
 使用 `X/Y/Z` 列头；四元数在表格下方单独显示 `W/X/Y/Z` 四个数值。曲线图例使用对应字段名，
 但只绘制前四组数据，不单独绘制四元数。曲线显示最近一段历史数据；顶部“窗口”可选择 `10 s`、
 `30 s` 或 `60 s`，垃圾桶按钮清空历史曲线，“暂停曲线”只暂停绘图，不停止 ROS 数据接收。
+
+安全门拒绝异常帧时，控制台不会收到该帧，也不会用旧值伪造一个新时间戳；连续异常时界面会按
+现有数据超时逻辑显示停止。过滤规则和可调参数见
+[`mcu_protocol/README.md`](../mcu_protocol/README.md#imu-安全门与滤波)。
 
 ### 温度、压力和深度
 
@@ -138,7 +144,7 @@ ros2 topic echo /mcu_bridge/diagnostics --once
 
 | 方向 | 话题 | 类型 | QoS |
 |---|---|---|---|
-| 订阅 | `/mcu_bridge/imu_raw` | `McuImuRaw` | SensorData / best effort |
+| 订阅 | `/mcu_bridge/imu_filtered` | `McuImuRaw` | SensorData / best effort |
 | 订阅 | `/mcu_bridge/env` | `McuEnv` | SensorData / best effort |
 | 订阅 | `/mcu_bridge/link_status` | `McuLinkStatus` | reliable + transient local |
 | 订阅 | `/mcu_bridge/diagnostics` | `McuDiagnostics` | reliable |

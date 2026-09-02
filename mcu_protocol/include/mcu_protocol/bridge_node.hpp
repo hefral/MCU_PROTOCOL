@@ -40,6 +40,7 @@
 #include "mcu_protocol_msgs/msg/mcu_link_status.hpp"
 
 #include "mcu_protocol/link_state.hpp"
+#include "mcu_protocol/imu_filter.hpp"
 #include "mcu_protocol/parser.hpp"
 #include "mcu_protocol/protocol.hpp"
 #include "mcu_protocol/serial_port.hpp"
@@ -82,6 +83,9 @@ private:
   int command_rate_hz_ = 20;
   bool publish_diagnostics_ = true;
 
+  ImuFilter imu_filter_;
+  uint64_t imu_filter_rejected_ = 0;
+
   // --- 串口与协议（仅读线程访问 port_/parser_，写串口见类注释）
   SerialPort port_;
   Parser parser_;
@@ -120,6 +124,7 @@ private:
   std::thread read_thread_;
 
   rclcpp::Publisher<mcu_protocol_msgs::msg::McuImuRaw>::SharedPtr pub_imu_;
+  rclcpp::Publisher<mcu_protocol_msgs::msg::McuImuRaw>::SharedPtr pub_imu_filtered_;
   rclcpp::Publisher<mcu_protocol_msgs::msg::McuEnv>::SharedPtr pub_env_;
   rclcpp::Publisher<mcu_protocol_msgs::msg::McuDiagnostics>::SharedPtr pub_diag_;
   rclcpp::Publisher<mcu_protocol_msgs::msg::McuLinkStatus>::SharedPtr pub_status_;

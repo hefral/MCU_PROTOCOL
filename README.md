@@ -49,7 +49,8 @@ ros2 run mcu_dashboard mcu_dashboard
 
 窗口默认左侧显示温度、绝对压力（hPa）、淡水深度（m）、四元数和四组 IMU XYZ 曲线，右侧显示 8 路
 电机测试控件。电机输出默认未使能；只有勾选 20 Hz 命令发布后才会向 `~/cmd` 发送命令。
-停止时窗口先发 4 帧全零再停发，详细操作和安全判据见
+窗口使用经过安全门、中值滤波和低通滤波的 `~/imu_filtered`；未经处理的数据保留在
+`~/imu_raw` 供排障。停止时窗口先发 4 帧全零再停发，详细操作和安全判据见
 [`mcu_dashboard/README.md`](mcu_dashboard/README.md)。
 
 参数在 [`mcu_protocol/config/bridge.yaml`](mcu_protocol/config/bridge.yaml)，
@@ -81,7 +82,8 @@ colcon test --packages-select mcu_protocol
 colcon test-result --verbose
 ```
 
-预期 **45 项全过**。这里失败说明代码逻辑坏了，不必去查线。
+`mcu_protocol` 当前包含 **56 项 GTest，预期全部通过**。这里失败说明代码逻辑坏了，
+不必去查线。
 
 ## 层次 2：接模拟器（不接硬件）
 
@@ -122,6 +124,7 @@ ros2 run mcu_protocol mcu_monitor
 
 ```bash
 ros2 topic hz /mcu_bridge/imu_raw          # 预期 20 Hz
+ros2 topic hz /mcu_bridge/imu_filtered     # 正常时约 20 Hz；安全门拒绝时会少帧
 ros2 topic echo /mcu_bridge/link_status --once
 ```
 

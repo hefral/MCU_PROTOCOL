@@ -12,6 +12,7 @@
 | 话题 | 方向 | 类型 | QoS |
 |---|---|---|---|
 | `~/imu_raw` | 出 | `McuImuRaw` | SensorData（**best_effort**，深度 5） |
+| `~/imu_filtered` | 出 | `McuImuRaw` | SensorData（**best_effort**，深度 5） |
 | `~/env` | 出 | `McuEnv` | SensorData（**best_effort**，深度 5） |
 | `~/diagnostics` | 出 | `McuDiagnostics` | reliable，深度 10 |
 | `~/link_status` | 出 | `McuLinkStatus` | reliable + **transient_local**，深度 1 |
@@ -19,22 +20,25 @@
 
 ## QoS：订阅端不匹配会静默收不到
 
-**这是最容易踩的坑。** `~/imu_raw` 和 `~/env` 是 best_effort 发布的。用默认
+**这是最容易踩的坑。** 两个 IMU 话题和 `~/env` 都是 best_effort 发布的。用默认
 （reliable）QoS 去订阅**不会匹配**，结果是话题存在、`ros2 topic hz` 有数据，
 而你的回调一次都不触发，且没有任何报错。
 
 ```cpp
 // 正确：遥测用 SensorDataQoS
 sub_ = create_subscription<mcu_protocol_msgs::msg::McuImuRaw>(
-  "/mcu_bridge/imu_raw", rclcpp::SensorDataQoS(),
+  "/mcu_bridge/imu_filtered", rclcpp::SensorDataQoS(),
   std::bind(&MyNode::onImu, this, std::placeholders::_1));
 ```
 
 ```python
 from rclpy.qos import qos_profile_sensor_data
-self.create_subscription(McuImuRaw, '/mcu_bridge/imu_raw',
+self.create_subscription(McuImuRaw, '/mcu_bridge/imu_filtered',
                          self.on_imu, qos_profile_sensor_data)
 ```
+
+控制和界面优先订阅 `~/imu_filtered`。`~/imu_raw` 原样保留 MCU 的 16 个 float，适合
+抓取尖峰、核对固件和过滤前后对照，不应直接进入闭环控制。
 
 `~/link_status` 是 **transient_local（latched）** 的：晚启动的节点一订阅就立刻
 拿到当前状态，不必等下一次变化。订阅端也要声明 `transient_local` 才能收到这个
@@ -52,6 +56,9 @@ ros2 run mcu_protocol mcu_monitor --ros-args -p bridge_ns:=/mcu_bridge -p refres
 一屏显示四路话题：链路状态位（连同后果，不只是位名）、16 个 IMU float、温压、
 诊断计数器。**不要和 `ros2 launch` 放同一个终端** —— 桥接节点的日志会插进重画里
 把画面搅烂。
+
+`mcu_monitor` 刻意查看 `~/imu_raw`，因为它的职责是排查串口和 MCU 原始输出；可视化
+控制台则查看 `~/imu_filtered`。
 
 三处与 `ros2 topic echo` 的差别，都是为了回答 echo 回答不了的问题：
 
@@ -78,6 +85,41 @@ ros2 run mcu_protocol mcu_monitor --ros-args -p bridge_ns:=/mcu_bridge -p refres
 
 它是 Python 调试工具，只 `exec_depend` rclpy，不在控制路径上；源文件不带 `.py`
 后缀的理由写在 `CMakeLists.txt` 的注释里（与 `--symlink-install` 有关）。
+
+---
+
+# IMU 安全门与滤波
+
+每个合法长度的 IMU 帧都会先原样发布到 `~/imu_raw`。随后桥接节点按以下顺序生成
+`~/imu_filtered`：
+
+1. 检查全部 16 个值是否为有限数，四元数范数是否在允许范围内，并检查相邻有效四元数的
+   姿态变化率。
+2. 加速度、角速度和磁场的 9 个标量分别经过 3 点因果中值，再经过一阶低通。
+3. 四元数先归一化并消除 `q/-q` 符号跳变，再做归一化线性插值低通。
+4. `roll/pitch/yaw` 从过滤后的四元数重新计算，不再使用 MCU 帧中的欧拉角字段。
+
+任一安全门不通过时，**整帧不发布到 `~/imu_filtered`**，但仍能在 `~/imu_raw` 看到，节点
+同时输出节流告警和累计拒绝数。连续异常会使过滤话题停止更新；闭环控制器必须对消息时间做
+超时判断并停止输出，不能把最后一帧无限保持为有效数据。串口重连、MCU 复位或上行中断会
+清空过滤历史，恢复后的第一帧重新初始化。
+
+3 点中值会消除单帧尖峰，但对真实阶跃约引入一个采样周期的确认延迟（当前 20 Hz 时约
+50 ms），低通还会增加相位滞后。默认参数适合先做真机观察，进入闭环前应按载体动态响应
+重新整定。
+
+| 参数 | 默认值 | 作用 |
+|---|---:|---|
+| `imu_filter.accel_cutoff_hz` | `5.0` | 加速度一阶低通截止频率 |
+| `imu_filter.gyro_cutoff_hz` | `5.0` | 角速度一阶低通截止频率 |
+| `imu_filter.mag_cutoff_hz` | `2.0` | 磁场一阶低通截止频率 |
+| `imu_filter.orientation_cutoff_hz` | `5.0` | 四元数一阶低通截止频率 |
+| `imu_filter.quaternion_norm_min` | `0.8` | 可接受四元数范数下界 |
+| `imu_filter.quaternion_norm_max` | `1.2` | 可接受四元数范数上界 |
+| `imu_filter.max_orientation_rate_deg_s` | `720.0` | 最大姿态变化率；设为 `0` 关闭该门 |
+
+截止频率设为 `0` 只旁路对应的一阶低通，不会关闭 3 点中值或其他安全门。环境数据
+`~/env` 当前不经过这组滤波。
 
 ---
 
@@ -196,9 +238,10 @@ void MyNode::onLinkStatus(const McuLinkStatus::SharedPtr s)
 
 ---
 
-# 遥测数据是原始浮点数组
+# IMU 遥测的数据布局
 
-`McuImuRaw.data` 是 `float32[16]`，当前顺序和单位为：
+`~/imu_raw` 和 `~/imu_filtered` 使用同一个 `McuImuRaw` 类型。`data` 是
+`float32[16]`，当前顺序和单位为：
 
 ```text
 [0] ax_g       [1] ay_g       [2] az_g

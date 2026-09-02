@@ -23,6 +23,55 @@ BridgeNode::BridgeNode(const rclcpp::NodeOptions & options)
   command_rate_hz_ = declare_parameter<int>("command_rate_hz", 20);
   publish_diagnostics_ = declare_parameter<bool>("publish_diagnostics", true);
 
+  ImuFilterConfig filter_config;
+  filter_config.accel_cutoff_hz =
+    declare_parameter<double>("imu_filter.accel_cutoff_hz", 5.0);
+  filter_config.gyro_cutoff_hz =
+    declare_parameter<double>("imu_filter.gyro_cutoff_hz", 5.0);
+  filter_config.mag_cutoff_hz =
+    declare_parameter<double>("imu_filter.mag_cutoff_hz", 2.0);
+  filter_config.orientation_cutoff_hz =
+    declare_parameter<double>("imu_filter.orientation_cutoff_hz", 5.0);
+  filter_config.quaternion_norm_min =
+    declare_parameter<double>("imu_filter.quaternion_norm_min", 0.8);
+  filter_config.quaternion_norm_max =
+    declare_parameter<double>("imu_filter.quaternion_norm_max", 1.2);
+  filter_config.max_orientation_rate_deg_s =
+    declare_parameter<double>("imu_filter.max_orientation_rate_deg_s", 720.0);
+  filter_config.nominal_period_s = 1.0 / 20.0;
+
+  if (!std::isfinite(filter_config.accel_cutoff_hz) || filter_config.accel_cutoff_hz < 0.0 ||
+    !std::isfinite(filter_config.gyro_cutoff_hz) || filter_config.gyro_cutoff_hz < 0.0 ||
+    !std::isfinite(filter_config.mag_cutoff_hz) || filter_config.mag_cutoff_hz < 0.0 ||
+    !std::isfinite(filter_config.orientation_cutoff_hz) ||
+    filter_config.orientation_cutoff_hz < 0.0)
+  {
+    RCLCPP_WARN(get_logger(), "IMU 滤波截止频率必须为有限非负数，无效项按 0 Hz 处理");
+    const auto sanitize_cutoff = [](double value) {
+        return std::isfinite(value) && value >= 0.0 ? value : 0.0;
+      };
+    filter_config.accel_cutoff_hz = sanitize_cutoff(filter_config.accel_cutoff_hz);
+    filter_config.gyro_cutoff_hz = sanitize_cutoff(filter_config.gyro_cutoff_hz);
+    filter_config.mag_cutoff_hz = sanitize_cutoff(filter_config.mag_cutoff_hz);
+    filter_config.orientation_cutoff_hz = sanitize_cutoff(filter_config.orientation_cutoff_hz);
+  }
+  if (!std::isfinite(filter_config.quaternion_norm_min) ||
+    !std::isfinite(filter_config.quaternion_norm_max) ||
+    filter_config.quaternion_norm_min <= 0.0 ||
+    filter_config.quaternion_norm_max <= filter_config.quaternion_norm_min)
+  {
+    RCLCPP_WARN(get_logger(), "IMU 四元数范数范围无效，恢复默认范围 0.8..1.2");
+    filter_config.quaternion_norm_min = 0.8;
+    filter_config.quaternion_norm_max = 1.2;
+  }
+  if (!std::isfinite(filter_config.max_orientation_rate_deg_s) ||
+    filter_config.max_orientation_rate_deg_s < 0.0)
+  {
+    RCLCPP_WARN(get_logger(), "IMU 最大姿态角速度不能为负，恢复默认 720 deg/s");
+    filter_config.max_orientation_rate_deg_s = 720.0;
+  }
+  imu_filter_.setConfig(filter_config);
+
   if (command_rate_hz_ <= 0 || command_rate_hz_ > 200) {
     RCLCPP_WARN(
       get_logger(), "command_rate_hz=%d 不合理，改用 20（MCU 期望 20 Hz）", command_rate_hz_);
@@ -40,6 +89,8 @@ BridgeNode::BridgeNode(const rclcpp::NodeOptions & options)
   // 价值，宁可丢也不要堆积延迟。
   pub_imu_ = create_publisher<mcu_protocol_msgs::msg::McuImuRaw>(
     "~/imu_raw", rclcpp::SensorDataQoS());
+  pub_imu_filtered_ = create_publisher<mcu_protocol_msgs::msg::McuImuRaw>(
+    "~/imu_filtered", rclcpp::SensorDataQoS());
   pub_env_ = create_publisher<mcu_protocol_msgs::msg::McuEnv>(
     "~/env", rclcpp::SensorDataQoS());
   if (publish_diagnostics_) {
@@ -70,6 +121,14 @@ BridgeNode::BridgeNode(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(
     get_logger(), "mcu_bridge 启动：device=%s baud=%d 命令 %d Hz 超时 %d ms",
     device_.c_str(), baud_, command_rate_hz_, cmd_timeout_ms_);
+  RCLCPP_INFO(
+    get_logger(),
+    "IMU 过滤：3 点中值 + 低通 accel %.1f Hz / gyro %.1f Hz / mag %.1f Hz / "
+    "姿态 %.1f Hz，四元数范数 %.2f..%.2f，最大姿态变化 %.1f deg/s",
+    filter_config.accel_cutoff_hz, filter_config.gyro_cutoff_hz,
+    filter_config.mag_cutoff_hz, filter_config.orientation_cutoff_hz,
+    filter_config.quaternion_norm_min, filter_config.quaternion_norm_max,
+    filter_config.max_orientation_rate_deg_s);
   // 首次发布一次状态，让订阅者立刻有个初始值（latched）。
   publishLinkStatus();
 }
@@ -116,6 +175,7 @@ void BridgeNode::readLoop()
       // 重连后必须清解析器：MCU 掉电瞬间可能在半帧处截断，残留的半帧会和新
       // 字节拼成一帧跨两次上电的乱码。
       parser_.reset();
+      imu_filter_.reset();
       {
         std::lock_guard<std::mutex> lk(state_mutex_);
         link_.onReconnect(nowMs());
@@ -173,6 +233,8 @@ void BridgeNode::readLoop()
       link_.counters().resyncs = parser_.stats().resyncs;
     }
     if (ev.uplink_lost) {
+      // 恢复后的第一帧不应继续和断流前的历史做中值或姿态变化率比较。
+      imu_filter_.reset();
       RCLCPP_WARN(
         get_logger(), "上行中断：超过 %ld ms 未收到任何有效帧（MCU 复位、掉电或线路故障）",
         static_cast<long>(LinkState::kUplinkTimeoutMs));
@@ -199,6 +261,12 @@ void BridgeNode::onFrame(const Frame & f, int64_t now_ms)
     link_.counters().resyncs = parser_.stats().resyncs;
   }
 
+  // USB 串口可能保持打开而 MCU 单独复位。先清过滤历史，再处理复位后的当前帧，
+  // 避免把新一轮时间轴的数据和复位前的数据混在一起。
+  if (ev.mcu_restarted) {
+    imu_filter_.reset();
+  }
+
   switch (static_cast<FrameType>(f.type)) {
     case FrameType::kImu: {
       const auto vals = decodeImu(f);
@@ -213,6 +281,22 @@ void BridgeNode::onFrame(const Frame & f, int64_t now_ms)
       fillHeader(msg, f);
       std::copy(vals->begin(), vals->end(), msg.data.begin());
       pub_imu_->publish(msg);
+
+      const auto filtered = imu_filter_.process(*vals, f.mcu_time_ms);
+      if (!filtered.accepted) {
+        ++imu_filter_rejected_;
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000,
+          "IMU 安全门拒绝 seq=%u：%s（累计 %lu 帧）；过滤话题不发布该帧",
+          f.seq, imuRejectReasonText(filtered.reason),
+          static_cast<unsigned long>(imu_filter_rejected_));
+        break;
+      }
+
+      mcu_protocol_msgs::msg::McuImuRaw filtered_msg;
+      fillHeader(filtered_msg, f);
+      std::copy(filtered.values.begin(), filtered.values.end(), filtered_msg.data.begin());
+      pub_imu_filtered_->publish(filtered_msg);
       break;
     }
 

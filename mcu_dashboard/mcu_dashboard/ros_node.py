@@ -30,7 +30,7 @@ class DashboardNode(Node):
 
         self.create_subscription(
             McuImuRaw,
-            f'{self.bridge_ns}/imu_raw',
+            f'{self.bridge_ns}/imu_filtered',
             self._on_imu,
             qos_profile_sensor_data,
         )

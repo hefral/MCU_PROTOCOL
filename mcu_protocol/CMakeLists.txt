@@ -23,6 +23,7 @@ add_library(mcu_protocol_core STATIC
   src/parser.cpp
   src/serial_port.cpp
   src/link_state.cpp
+  src/imu_filter.cpp
 )
 target_include_directories(mcu_protocol_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -69,6 +70,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_link_state test/test_link_state.cpp)
   target_link_libraries(test_link_state mcu_protocol_core)
+
+  ament_add_gtest(test_imu_filter test/test_imu_filter.cpp)
+  target_link_libraries(test_imu_filter mcu_protocol_core)
 
   # 刻意不启用 ament_lint_auto 的 copyright/uncrustify：本项目注释与文档用中文，
   # 且代码风格已统一，让 linter 在这两项上反复报错只会让人忽略测试结果。
