@@ -14,7 +14,7 @@ setup(
         ('share/' + package_name, ['package.xml', 'README.md']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
     ],
-    install_requires=['setuptools', 'PyQt5>=5.15', 'pyqtgraph>=0.13'],
+    install_requires=['setuptools', 'PyQt5>=5.15', 'pyqtgraph>=0.12'],
     tests_require=['pytest'],
     zip_safe=True,
     maintainer='hang',

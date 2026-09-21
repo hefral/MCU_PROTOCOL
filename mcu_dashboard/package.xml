@@ -13,6 +13,12 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>mcu_protocol_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <!-- 图形界面依赖。缺这两个时 ros2 run mcu_dashboard 会在 import 阶段就失败
+       （ModuleNotFoundError: PyQt5 / pyqtgraph），所以必须在这里声明，
+       否则 rosdep install 装不出来，新机器上会重复踩坑。
+       实测 jammy 源里 pyqtgraph 为 0.12.4，setup.py 的版本约束已与之对齐。 -->
+  <exec_depend>python3-pyqt5</exec_depend>
+  <exec_depend>python3-pyqtgraph</exec_depend>
 
   <test_depend>ament_pytest</test_depend>
   <test_depend>python3-pytest</test_depend>
