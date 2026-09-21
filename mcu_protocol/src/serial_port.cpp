@@ -37,6 +37,7 @@ SerialPort::~SerialPort()
 bool SerialPort::open(const std::string & device, uint32_t baud, std::string & error)
 {
   close();
+  open_errno_ = 0;
 
   speed_t speed;
   if (!baudConstant(baud, speed)) {
@@ -47,6 +48,7 @@ bool SerialPort::open(const std::string & device, uint32_t baud, std::string & e
   // O_NOCTTY：不要把串口当成控制终端，否则 Ctrl-C 之类的信号会打到本进程。
   fd_ = ::open(device.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC);
   if (fd_ < 0) {
+    open_errno_ = errno;
     error = "打开 " + device + " 失败: " + std::strerror(errno);
     return false;
   }
@@ -67,6 +69,7 @@ bool SerialPort::open(const std::string & device, uint32_t baud, std::string & e
 
   struct termios tio;
   if (::tcgetattr(fd_, &tio) < 0) {
+    open_errno_ = errno;
     error = "tcgetattr 失败: " + std::string(std::strerror(errno));
     close();
     return false;
@@ -90,6 +93,7 @@ bool SerialPort::open(const std::string & device, uint32_t baud, std::string & e
   tio.c_cc[VTIME] = 0;
 
   if (::tcsetattr(fd_, TCSANOW, &tio) < 0) {
+    open_errno_ = errno;
     error = "tcsetattr 失败: " + std::string(std::strerror(errno));
     close();
     return false;
@@ -117,6 +121,10 @@ void SerialPort::close() noexcept
     ::close(fd_);
     fd_ = -1;
   }
+  // 独占标志跟着 fd 走。关掉之后必须复位，否则一次成功的 open() 之后紧接一次
+  // 失败的 open()（EBUSY/ENOENT），exclusive() 会继续报 true，把调用方引向
+  // 「没拿到独占」的错误结论。
+  exclusive_ = false;
 }
 
 ssize_t SerialPort::read(uint8_t * buf, size_t len, int timeout_ms)

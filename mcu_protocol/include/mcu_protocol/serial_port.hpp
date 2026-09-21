@@ -39,6 +39,13 @@ public:
   /// tty 驱动上完全起不来。
   bool open(const std::string & device, uint32_t baud, std::string & error);
 
+  /// 最近一次 open() 失败时的 errno；上次 open() 成功则为 0。
+  ///
+  /// 存在的理由：错误字符串只有 "Device or resource busy" 一句话，而 EBUSY
+  /// （被别的进程独占）和 ENOENT（设备还没枚举出来）在现场的处理方式完全相反
+  /// —— 前者要去杀掉占用者，后者只要等。调用方需要能区分二者。
+  int openErrno() const noexcept { return open_errno_; }
+
   void close() noexcept;
   bool isOpen() const noexcept { return fd_ >= 0; }
 
@@ -66,6 +73,7 @@ private:
   std::string device_;
   bool exclusive_ = false;
   std::string excl_error_;
+  int open_errno_ = 0;
 };
 
 }  // namespace mcu_protocol

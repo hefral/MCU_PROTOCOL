@@ -2,15 +2,69 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <utility>
 #include <vector>
 
 namespace mcu_protocol
 {
+
+namespace
+{
+
+/// 返回当前持有 device 的进程清单，形如 "PID 3972 (mcu_bridge)"；无人持有时为空。
+///
+/// 为什么值得做：串口被 TIOCEXCL 独占后再打开，内核只回一句 EBUSY，**不说占用者
+/// 是谁**。现场最常见的原因是上一次 ros2 launch 没退干净（终端窗口被直接关掉，
+/// 节点成了孤儿进程继续持锁），而它和「串口坏了」「设备没插」从报错上完全分不清，
+/// 于是现场会去反复拔插 USB —— 拔插会让占用者掉线重连、短暂释放，看起来像是
+/// 「拔插修好了」，其实只是碰巧抢到了锁。直接把占用者的 PID 打出来，这个循环就断了。
+std::string describeDeviceHolders(const std::string & device)
+{
+  std::error_code ec;
+  const std::filesystem::path target = std::filesystem::canonical(device, ec);
+  if (ec) {
+    return {};
+  }
+
+  std::string holders;
+  for (const auto & proc : std::filesystem::directory_iterator("/proc", ec)) {
+    const std::string pid = proc.path().filename().string();
+    if (pid.empty() ||
+      !std::all_of(pid.begin(), pid.end(),
+        [](unsigned char c) {return std::isdigit(c) != 0;}))
+    {
+      continue;
+    }
+
+    std::error_code fd_ec;
+    for (const auto & fd : std::filesystem::directory_iterator(proc.path() / "fd", fd_ec)) {
+      std::error_code link_ec;
+      if (std::filesystem::read_symlink(fd.path(), link_ec) != target) {
+        continue;
+      }
+      std::string comm = "?";
+      std::ifstream comm_file(proc.path() / "comm");
+      if (comm_file) {
+        std::getline(comm_file, comm);
+      }
+      if (!holders.empty()) {
+        holders += "、";
+      }
+      holders += "PID " + pid + " (" + comm + ")";
+    }
+  }
+  return holders;
+}
+
+}  // namespace
 
 using namespace std::chrono_literals;  // NOLINT
 
@@ -164,7 +218,33 @@ void BridgeNode::readLoop()
         // 打开失败会持续存在（设备没插、权限不足），每次都打一条会刷爆日志。
         // 只在状态变化时打一次，之后靠 link_status 的 serial_open=false 反映。
         if (!warned_open_fail) {
-          RCLCPP_ERROR(get_logger(), "%s；1 s 后重试", err.c_str());
+          // EBUSY 和 ENOENT 的处理方向正好相反，混在一句话里会把现场带偏：
+          // 前者是「有人在用，去杀掉它」，后者是「设备还没枚举出来，等就行」。
+          if (port_.openErrno() == EBUSY) {
+            const std::string holders = describeDeviceHolders(device_);
+            if (holders.empty()) {
+              RCLCPP_ERROR(
+                get_logger(),
+                "%s —— 该口被其他进程独占，但没能列出占用者（多半属于其他用户，"
+                "需要 root 才看得见）。用 fuser -v %s 确认；最常见的原因是上一次 "
+                "ros2 launch 没退干净，终端被关掉后进程成了孤儿",
+                err.c_str(), device_.c_str());
+            } else {
+              RCLCPP_ERROR(
+                get_logger(),
+                "%s —— 该口已被其他进程独占：%s。先结束它再启动（kill <PID>）；"
+                "最常见的原因是上一次 ros2 launch 没退干净，终端被关掉后进程成了孤儿",
+                err.c_str(), holders.c_str());
+            }
+          } else if (port_.openErrno() == ENOENT) {
+            RCLCPP_ERROR(
+              get_logger(),
+              "%s —— 设备还没枚举出来，等待中（开机后 CH340 上电常慢于节点启动，"
+              "插着却打不开时先看 ls -l %s）；1 s 后重试",
+              err.c_str(), device_.c_str());
+          } else {
+            RCLCPP_ERROR(get_logger(), "%s；1 s 后重试", err.c_str());
+          }
           warned_open_fail = true;
           publishLinkStatus();
         }

@@ -130,7 +130,7 @@ colcon test --packages-select mcu_protocol
 colcon test-result --verbose
 ```
 
-`mcu_protocol` 当前包含 **56 项 GTest，预期全部通过**。这里失败说明代码逻辑坏了，
+`mcu_protocol` 当前包含 **63 项 GTest，预期全部通过**。这里失败说明代码逻辑坏了，
 不必去查线。
 
 ## 层次 2：接模拟器（不接硬件）
@@ -316,10 +316,47 @@ MCU 主循环被拖延，UART 数据来不及取走。注意这个计数器**只
 看 `not_handshaked`。握手未完成时 MCU **拒收**命令帧。若 `version_mismatch` 为
 true，则是协议版本不匹配 —— 这是配置错误，重连不会修好，需要更新两端之一。
 
+## 打不开串口：`No such file or directory`
+
+设备还没枚举出来。开机后 CH340 上电常常慢于节点启动，**插着也会先报这个**，节点
+会每秒重试，通常几秒内自己就好。确认方式：
+
+```bash
+ls -l /dev/mcu        # 软链在、但目标是 ttyUSBx 不存在，就是这种情况
+lsusb | grep 1a86     # 没有任何 CH34x，说明板子还没上电/没枚举
+```
+
+不需要拔插，等即可。
+
+## 打不开串口：`Device or resource busy`
+
+**有别的进程正独占这个口**，最常见的是上一次 `ros2 launch` 没退干净 —— 终端窗口被
+直接关掉时，节点会变成孤儿进程继续持锁。症状很像硬件故障，但拔插 USB 只是让占用者
+掉线重连、短暂释放锁，所以看起来像「拔插能修好」，其实只是抢到了锁。
+
+节点会直接把占用者的 PID 打出来，照它给的 PID 结束即可：
+
+```
+打开 /dev/mcu 失败: Device or resource busy —— 该口已被其他进程独占：
+PID 3972 (mcu_bridge)。先结束它再启动（kill <PID>）……
+```
+
+也可以自己查：
+
+```bash
+fuser -v /dev/mcu
+```
+
+**预防**：用 `Ctrl-C` 结束 launch，不要直接关终端窗口。结束前确认没有残留：
+
+```bash
+pgrep -af 'mcu_bridge|ros2 launch'
+```
+
 ## 设备拔出后重连失败
 
-已修复（`close()` 里补 `TIOCNXCL`）。若仍出现 `EBUSY`，检查是否有残留进程持有该
-tty：`fuser -v /dev/ttyUSB0`。
+已修复（`close()` 里补 `TIOCNXCL`，并把 `exclusive_` 一并复位）。若仍出现 `EBUSY`，
+按上一节处理：那是**另一个进程**在占用，不是本节点没释放。
 
 ---
 
