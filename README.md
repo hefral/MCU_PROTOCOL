@@ -38,6 +38,7 @@ source install/setup.bash
 ros2 launch mcu_protocol bridge.launch.py
 ros2 launch mcu_protocol bridge.launch.py device:=/dev/ttyUSB1
 ros2 launch mcu_protocol bridge.launch.py log_level:=debug
+ros2 launch mcu_protocol bridge.launch.py release_device:=false   # 不自动清理残留占用者
 ```
 
 桥接节点已经运行后，可另开一个终端启动可视化窗口：
@@ -334,7 +335,27 @@ lsusb | grep 1a86     # 没有任何 CH34x，说明板子还没上电/没枚举
 直接关掉时，节点会变成孤儿进程继续持锁。症状很像硬件故障，但拔插 USB 只是让占用者
 掉线重连、短暂释放锁，所以看起来像「拔插能修好」，其实只是抢到了锁。
 
-节点会直接把占用者的 PID 打出来，照它给的 PID 结束即可：
+**默认已经自动处理**：`release_device` 默认为 `true`，launch 会在启动节点前扫描
+`/proc`，把占用该设备且确认是 `mcu_bridge` / `ros2 launch` 的残留进程 SIGTERM 掉，
+等信息释放后再启动节点：
+
+```
+[mcu_bridge.launch] /dev/mcu 被残留进程占用，正在结束：PID 14417, PID 14451
+[mcu_bridge.launch] 串口已释放
+[mcu_bridge-1] 串口已打开：/dev/mcu @ 921600
+```
+
+只清理「我们自己留下的残骸」：靠 `/proc/<pid>/exe` 的可执行文件名是 `mcu_bridge`，
+或命令行里含 `bin/ros2 launch` 来识别。别的工具占用这个口时不会被杀，只留警告。
+只发 SIGTERM、**不升级为 SIGKILL** —— 强杀可能留下 TIOCEXCL。
+
+不想要这个行为（例如想自己确认是谁在占用）就关掉，退回纯诊断：
+
+```bash
+ros2 launch mcu_protocol bridge.launch.py release_device:=false
+```
+
+关掉后节点会把占用者的 PID 直接打出来，照它给的 PID 结束即可：
 
 ```
 打开 /dev/mcu 失败: Device or resource busy —— 该口已被其他进程独占：
