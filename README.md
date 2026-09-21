@@ -27,7 +27,7 @@ sudo usermod -aG dialout $USER     # 之后需重新登录才生效
 
 ```bash
 cd ~/ros2_ws/MCU_PROTOCOL
-source /opt/ros/jazzy/setup.bash
+source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 source install/setup.bash
 ```
@@ -56,14 +56,62 @@ ros2 run mcu_dashboard mcu_dashboard
 参数在 [`mcu_protocol/config/bridge.yaml`](mcu_protocol/config/bridge.yaml)，
 每一项都有注释说明改动后果。命令行传入的 `device` 覆盖文件里的值。
 
-**设备号会变。** 插拔顺序不同，`/dev/ttyUSB0` 可能变成 `ttyUSB1`。稳定做法是用
-by-id 路径：
+## 串口环境准备（每台机一次，已配置好可跳过）
+
+默认 `device:=/dev/mcu`。它是本机 udev 规则为 CH340（`1a86:7523`）建的**固定软链**，
+指向当前的 `ttyUSBx`，所以插拔变号、换 USB 口都不受影响，开机插上即可用。
+
+规则文件 `/etc/udev/rules.d/99-mcu-ch340.rules`：
+
+```udev
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_MM_PORT_IGNORE}="1", SYMLINK+="mcu", GROUP="dialout", MODE="0660"
+```
+
+> udev 规则**不支持反斜杠换行**，必须写成一整行。
+
+它解决了三类会「莫名打开串口失败」的问题：
+
+| 症状 | 原因 | 处理 |
+|---|---|---|
+| `/dev/ttyUSB0` 刚出现就消失，日志有 `claimed by ch341 while 'brltty' sets config #1` | brltty 把 `1a86:7523` 误判成盲文点显器（Ubuntu 已知 bug） | 屏蔽 `85-brltty.rules` 并 mask `brltty*.service` |
+| 设备号在 `ttyUSB0/1/2` 间跳 | USB 枚举顺序不固定 | 固定软链 `/dev/mcu` |
+| 收到莫名 AT 指令 / 口被占用 | ModemManager 探测串口 | `ID_MM_DEVICE_IGNORE=1` |
+
+在新机器上重建这套配置：
+
+```bash
+# 1) 挡住 brltty（它不依赖 udev 规则，还会自己扫描串口，必须连带 mask 服务）
+sudo ln -sf /dev/null /etc/udev/rules.d/85-brltty.rules
+sudo systemctl stop brltty-udev.service brltty.service
+sudo systemctl mask brltty-udev.service brltty.service
+
+# 2) 装固定软链 + 忽略 ModemManager 的规则
+sudo tee /etc/udev/rules.d/99-mcu-ch340.rules >/dev/null <<'EOF'
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_MM_PORT_IGNORE}="1", SYMLINK+="mcu", GROUP="dialout", MODE="0660"
+EOF
+
+# 3) 生效
+sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=tty
+```
+
+验证（拔插一次板子后）：
+
+```bash
+ls -l /dev/mcu                       # -> ttyUSB0
+udevadm info -q property -n /dev/mcu | grep ID_MM   # ID_MM_DEVICE_IGNORE=1
+pgrep -a brltty || echo "brltty 未运行"
+```
+
+未装该规则的机器上，退回到真实节点或 by-id 路径即可：
 
 ```bash
 ls -l /dev/serial/by-id/
 ros2 launch mcu_protocol bridge.launch.py \
   device:=/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
 ```
+
+> 注意：CH340 没有唯一序列号，同时插两个 CH340 时 by-id 名字会冲突
+> （`...-if00-port0` / `...-if00-port1`）。本机只接一块 MCU 板，不受影响。
 
 ---
 

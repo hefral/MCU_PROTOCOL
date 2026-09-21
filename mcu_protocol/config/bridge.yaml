@@ -5,11 +5,15 @@
 
 mcu_bridge:
   ros__parameters:
-    # 串口设备。CH340 通常是 /dev/ttyUSB0，但插拔顺序会变号。稳定做法是用
-    # by-id 路径，例如：
-    #   /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
-    # 查看方式：ls -l /dev/serial/by-id/
-    device: /dev/ttyUSB0
+    # 串口设备。默认 /dev/mcu 是本机 udev 规则为 CH340(1a86:7523) 建的固定软链，
+    # 指向当前的 ttyUSBx，插拔变号不受影响，开机即可用。规则见：
+    #   /etc/udev/rules.d/99-mcu-ch340.rules
+    #
+    # 若在没有装该规则的机器上运行，改回真实节点或 by-id 路径均可：
+    #   device: /dev/ttyUSB0
+    #   device: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+    # 查看 by-id：ls -l /dev/serial/by-id/
+    device: /dev/mcu
 
     # 波特率。协议固定 921600（MCU 实际 923077，误差 +0.16%，在容限内）。
     # 改这个值必须同时改固件，否则表现为全帧 CRC 失败。

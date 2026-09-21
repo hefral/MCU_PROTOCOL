@@ -5,6 +5,7 @@
     ros2 launch mcu_protocol bridge.launch.py device:=/dev/ttyUSB1
     ros2 launch mcu_protocol bridge.launch.py device:=/tmp/mcu_sim   # 接 proto_sim.py
 
+默认 device=/dev/mcu，是本机 udev 为 CH340 建的固定软链（见 README「串口环境准备」）。
 命令行传入的 device 会覆盖 config/bridge.yaml 里的值 —— 换设备号不必改文件。
 """
 
@@ -23,8 +24,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'device',
-            default_value='/dev/ttyUSB0',
-            description='串口设备路径。插拔会变号，稳定做法是用 /dev/serial/by-id/ 下的路径',
+            default_value='/dev/mcu',
+            description='串口设备路径。默认 /dev/mcu 是 udev 为 CH340 建的固定软链，插拔不变号',
         ),
         DeclareLaunchArgument(
             'params_file',
